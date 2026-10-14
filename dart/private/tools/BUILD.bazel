@@ -91,6 +91,23 @@ dart_test(
     ],
 )
 
+# Copies files into a declared directory for `assemble_source_dir`, through
+# //dart:copy_toolchain_type. Only dart:io, so it names no pub dependencies.
+dart_binary(
+    name = "copy_tree",
+    compile_mode = "exe",
+    main = "copy_tree.dart",
+    visibility = ["//dart:__subpackages__"],
+)
+
+dart_test(
+    name = "copy_tree_test",
+    size = "small",
+    srcs = ["copy_tree.dart"],
+    main = "copy_tree_test.dart",
+    deps = ["@ext_pub_deps//:test"],
+)
+
 dart_binary(
     name = "format_runner",
     compile_mode = "exe",

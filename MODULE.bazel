@@ -43,12 +43,6 @@ bazel_dep(name = "sqlite3", version = "3.53.4")
 # toolchain's helper tools for macOS 11, the oldest Xcode 27's libc++ accepts
 # without a warning. Dev-only: the C++ toolchain is the consuming module's call.
 bazel_dep(name = "apple_support", version = "2.9.0", dev_dependency = True)
-
-# Used by `dart_library`/`dart_source_set` to assemble generated + hand-written
-# sources into one directory (copy_to_directory). Regular (not dev) dep so
-# downstream modules get it; self-registers its copy toolchains.
-bazel_dep(name = "bazel_lib", version = "3.7.2")
-
 bazel_dep(name = "rules_multitool", version = "1.11.1", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.8.0", dev_dependency = True)
 bazel_dep(name = "bazel_skylib_gazelle_plugin", version = "1.9.2", dev_dependency = True)
@@ -60,6 +54,9 @@ dart.toolchain(dart_version = "3.13.5")
 use_repo(dart, "dart_toolchains")
 
 register_toolchains("@dart_toolchains//:all")
+
+# Copies files into one directory for `dart_source_set` and the staging rules.
+register_toolchains("//dart:copy_toolchain")
 
 multitool = use_extension(
     "@rules_multitool//multitool:extension.bzl",

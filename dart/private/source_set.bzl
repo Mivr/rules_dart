@@ -13,18 +13,20 @@ leaves one record per package name, so a name never maps to two roots.
 Copies remain where a consumer needs one real directory tree:
 
 - `assemble_source_dir`, which `dart_source_set` and `project_staging.bzl` use.
-  It copies with bazel-lib's `copy_to_directory` (portable on Windows, no bash,
-  no symlink privilege). `dart_source_set` exposes it as a package-agnostic
-  primitive, consumed via `dart_library`'s `srcs_dir`.
+  It copies with the `copy_tree` tool (`dart/private/tools/copy_tree.dart`),
+  reached through `//dart:copy_toolchain_type`. The tool is portable to Windows,
+  needs no bash and no symlink privilege. `dart_source_set` exposes it as a
+  package-agnostic primitive, consumed via `dart_library`'s `srcs_dir`.
 - `colocate_packages` and `colocate_entrypoint`, the directory-assembly helpers
   `dart/utils.bzl` exports to rule sets built on rules_dart. No rule in this
   repository calls them.
 """
 
-load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory_bin_action")
 load("//dart/private:dart_info.bzl", "derived_package_info")
 
-COPY_TO_DIRECTORY_TOOLCHAINS = ["@bazel_lib//lib:copy_to_directory_toolchain_type"]
+# The toolchain that provides the `copy_tree` tool. Rules that copy files list it
+# here; `dart/utils.bzl` exports the same list for rule sets built on rules_dart.
+COPY_TO_DIRECTORY_TOOLCHAINS = ["//dart:copy_toolchain_type"]
 
 def needs_source_assembly(srcs):
     """Whether `srcs` must be assembled into one directory before compilation.
@@ -55,28 +57,74 @@ def assemble_source_dir(ctx, name, srcs, root_paths = ["."], replace_prefixes = 
     Args:
       ctx: The rule context (must carry `COPY_TO_DIRECTORY_TOOLCHAINS`).
       name: Basename for the declared directory (unique within the package).
-      srcs: List of File objects (source and/or generated) to assemble.
-      root_paths: `copy_to_directory` root paths; `"."` is the current package.
-      replace_prefixes: `copy_to_directory` prefix rewrites for cross-package layout.
-      include_external_repositories: `copy_to_directory` external repo name
-        patterns; external files are excluded unless their repo matches, and
-        matching files are staged at their repo-relative paths.
+      srcs: List of File objects (source and/or generated, or tree artifacts)
+        to assemble.
+      root_paths: Root paths to strip; `"."` is the current package. Globs are
+        supported.
+      replace_prefixes: Prefix rewrites, applied after the roots, for cross-package
+        layout. Globs are supported.
+      include_external_repositories: Repository name patterns. Files from another
+        repository are excluded unless their repository matches, and matching
+        files are staged at their repo-relative paths.
 
     Returns:
       The assembled directory File (a tree artifact).
     """
     dst = ctx.actions.declare_directory(name)
-    copy_to_directory_bin_action(
-        ctx,
-        name = name,
-        dst = dst,
-        copy_to_directory_bin = ctx.toolchains["@bazel_lib//lib:copy_to_directory_toolchain_type"].copy_to_directory_info.bin,
-        files = srcs,
-        root_paths = root_paths,
-        replace_prefixes = replace_prefixes,
-        include_external_repositories = include_external_repositories,
+
+    # `"."` names the calling rule's package. A replace key ending in `**` would
+    # match every path, so it is rejected.
+    roots = [p if p != "." else ctx.label.package for p in root_paths]
+    for prefix in replace_prefixes.keys():
+        if prefix.endswith("**"):
+            fail("replace_prefix '{}' must not end with '**' glob expression".format(prefix))
+
+    # The options and the file list go in a params file, one value per line, so a
+    # long list stays off the command line. `copy_tree` reads its records in order.
+    args = ctx.actions.args()
+    args.use_param_file("@%s", use_always = True)
+    args.set_param_file_format("multiline")
+    args.add(dst.path)
+    for root in roots:
+        args.add("--root")
+        args.add(root)
+    for prefix, value in replace_prefixes.items():
+        args.add("--replace")
+        args.add(prefix)
+        args.add(value)
+    for pattern in include_external_repositories:
+        args.add("--external")
+        args.add(pattern)
+    args.add("--workspace")
+    args.add(ctx.label.workspace_name)
+    args.add_all(srcs, map_each = _copy_record, expand_directories = True)
+
+    ctx.actions.run(
+        executable = ctx.toolchains["//dart:copy_toolchain_type"].copy_tree,
+        arguments = [args],
+        inputs = srcs,
+        outputs = [dst],
+        mnemonic = "DartCopyTree",
+        progress_message = "Copying files to directory %{output}",
+        toolchain = "//dart:copy_toolchain_type",
     )
     return dst
+
+def _copy_record(f):
+    """The `--file` record `copy_tree` reads for one input file.
+
+    `workspace_path` is the file's path inside its repository: `short_path`
+    without the `../<repo>/` prefix an external file carries.
+
+    Args:
+      f: A File from `srcs`, or a file of a tree artifact in `srcs`.
+
+    Returns:
+      The record's values, which Args flattens into the params file.
+    """
+    short = f.short_path
+    workspace_path = short[short.find("/", 3) + 1:] if short.startswith("../") else short
+    return ["--file", f.path, short, f.owner.workspace_name, workspace_path]
 
 def package_for(short_path, packages):
     """Returns the package_name owning `short_path`, by longest matching `lib_root`.

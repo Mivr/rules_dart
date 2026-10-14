@@ -21,7 +21,7 @@ outside the project dir in both.
 - Copy (`copy_external = True`, the default). Each external package gets its
   own tree artifact, `<name>.extpkgs/<pkg>`, referenced from the config by a
   `../../` rootUri. External (pub) packages cannot share the `src` tree:
-  `copy_to_directory` maps external files repo-relative, so two pub spokes
+  the copy maps external files repo-relative, so two pub spokes
   would collide at `lib/...`. `dart_format` copies. It reads its staged project
   from runfiles, where external repositories do not sit at the path a relative
   rootUri into `external/` would name, so the staged config must carry the
@@ -72,7 +72,7 @@ def mangle_package_dir(name):
 def _external_sub_path(lib_root):
     """Returns the repo-relative directory of an external `lib_root`.
 
-    An external `lib_root` is `../<repo>[/<sub>]`; `copy_to_directory` stages
+    An external `lib_root` is `../<repo>[/<sub>]`; the copy stages
     external files at their repo-relative paths, so the package root inside
     its staged tree is `<sub>` (usually empty — pub spokes keep `lib/` at the
     repo root).
@@ -350,7 +350,7 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
     # paths — `<name>.proj/src` is a tree artifact, and Bazel rejects declared
     # files under a declared directory — so each is written to a sibling
     # `.pkgstubs` staging spot and mapped into place by the same
-    # `copy_to_directory` that assembles the tree.
+    # copy that assembles the tree.
     stub_files = []
     replace_prefixes = {}
     for lib_root, package_name in main_package_roots(packages):

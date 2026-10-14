@@ -1,6 +1,7 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("//dart/private:build_settings.bzl", "dart_defines_flag")
+load("//dart/private:copy_toolchain.bzl", "copy_toolchain")
 load("//dart/private:dart_sdk_binary.bzl", "dart_sdk_binary")
 load("//dart/private:resolved_toolchain.bzl", "resolved_toolchain")
 
@@ -73,6 +74,25 @@ toolchain_type(
 # registers no compile toolchain for.
 toolchain_type(
     name = "exec_tools_toolchain_type",
+    visibility = ["//visibility:public"],
+)
+
+# The tool that copies files into a directory (`assemble_source_dir`). Registered
+# in MODULE.bazel; rules declare `COPY_TO_DIRECTORY_TOOLCHAINS` to get it.
+toolchain_type(
+    name = "copy_toolchain_type",
+    visibility = ["//visibility:public"],
+)
+
+copy_toolchain(
+    name = "copy_toolchain_impl",
+    tool = "//dart/private/tools:copy_tree",
+)
+
+toolchain(
+    name = "copy_toolchain",
+    toolchain = ":copy_toolchain_impl",
+    toolchain_type = ":copy_toolchain_type",
     visibility = ["//visibility:public"],
 )
 
