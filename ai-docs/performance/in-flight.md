@@ -50,8 +50,10 @@ build on `main`, not on this.
   rules_dart's `pub` extension allows one version of each package per module
   (`_fe_analyzer_shared has conflicting versions`). Moving the whole module to
   14.1.0 breaks `go_router_builder` resolution and changes 97 shim dependency
-  versions. Options are being put to the user (see `decisions.md` once
-  decided).
+  versions. **Resolved**: re-vendor from SDK commit `dbeb7e1` (the analyzer
+  13.3.0 publish commit). Its linter compiles against the pinned analyzer, and
+  its rule set differs from SDK 3.13.5's by one rule (`migrate_design_widgets`).
+  See `decisions.md`. Being wired in now.
 - **Needs**, before landing: a `MODULE.bazel.lock` refresh if a hub is added,
   and the CI analysis red paths passing with the flag on.
 

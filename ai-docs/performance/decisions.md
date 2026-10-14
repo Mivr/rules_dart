@@ -86,6 +86,18 @@ release matching that SDK's analyzer, in a dedicated pub hub for the summary
 tool only; the codegen shims stay on 13.3.0. When the default SDK moves, the
 linter must be re-vendored and the pin moved.
 
+**Linter vendored from the analyzer 13.3.0 publish commit, not tag 3.13.5
+(agent).** rules_dart's `pub` extension allows one version of each package per
+module, so a separate analyzer 14.1.0 hub for the summary tool is impossible
+(`_fe_analyzer_shared has conflicting versions`). Moving the whole module to
+14.1.0 breaks `go_router_builder` resolution and changes 97 shim dependency
+versions, and the 3.13.5 linter has 135 errors against 13.3.0. The linter at
+`dbeb7e1` ("Prepare to publish analyzer 13.3.0") compiles against the pinned
+analyzer, and its rule set differs from SDK 3.13.5's by one rule,
+`migrate_design_widgets`. Rule: the vendored linter comes from the SDK commit
+that published the module's pinned `package:analyzer`, and is re-vendored when
+that pin moves.
+
 **Next items (user).** Do the analyzer-only SDK file set, drop `bazel_lib`,
 codegen on summaries, and multi-root in the fallback compile.
 
