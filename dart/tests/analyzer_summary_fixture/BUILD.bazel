@@ -1,0 +1,81 @@
+load("//dart:defs.bzl", "dart_library", "dart_source_set")
+load("//dart/tests:analyzer_summary_test.bzl", "summary_packages_test")
+
+# A library assembled into one directory (`srcs_dir`) is opaque: its `.dart`
+# files are not visible to the aspect, so it has no summary of its own. Its
+# package must stay uncovered, so `dart_analyze` analyzes a dependent from source.
+dart_source_set(
+    name = "opaque_srcs",
+    srcs = ["lib/opaque.dart"],
+)
+
+dart_library(
+    name = "opaque",
+    package_name = "opaque_dep",
+    language_version = "3.11",
+    srcs_dir = ":opaque_srcs",
+)
+
+# A dependent of the opaque library, with sources of its own.
+dart_library(
+    name = "user",
+    package_name = "summary_user",
+    srcs = ["lib/user.dart"],
+    language_version = "3.11",
+    deps = [":opaque"],
+)
+
+# A generated library, exported by a hand-written one. It lives in the output
+# tree, not beside the sources, so its package is covered only if the summary
+# carries the export. The analysis of a dependent through the export is checked
+# by //e2e/codegen:reexport_pkg.
+genrule(
+    name = "generated_lib",
+    outs = ["lib/generated.dart"],
+    cmd = "echo \"String generated() => 'generated';\" > $@",
+)
+
+dart_library(
+    name = "generated_fixture",
+    package_name = "generated_fixture",
+    srcs = [
+        "lib/generated_api.dart",
+        ":generated_lib",
+    ],
+    language_version = "3.11",
+)
+
+summary_packages_test(
+    name = "generated_export_covered_test",
+    size = "small",
+    expect_covered = ["generated_fixture"],
+    target_under_test = ":generated_fixture",
+)
+
+# A façade with no sources of its own: its package has nothing to cover.
+dart_library(
+    name = "facade",
+    package_name = "summary_facade",
+    srcs = [],
+    language_version = "3.11",
+    deps = [":user"],
+)
+
+# The dependent's own package is covered by its summary, and the opaque
+# library's package is not, so its dependents are analyzed from source.
+summary_packages_test(
+    name = "opaque_not_covered_test",
+    size = "small",
+    expect_covered = ["summary_user"],
+    expect_uncovered = ["opaque_dep"],
+    target_under_test = ":user",
+)
+
+# A façade covers its own package although it has no summary.
+summary_packages_test(
+    name = "facade_covered_test",
+    size = "small",
+    expect_covered = ["summary_facade"],
+    expect_uncovered = ["opaque_dep"],
+    target_under_test = ":facade",
+)

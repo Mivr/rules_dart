@@ -128,6 +128,17 @@ def _own_sources(info, files):
     prefix = (info.lib_root + "/lib/") if info.lib_root else "lib/"
     return [f for f in files if f.extension == "dart" and f.short_path.startswith(prefix)]
 
+def _has_own_sources(files):
+    """Returns whether `files` hold Dart sources, or a directory of them (`srcs_dir`).
+
+    Args:
+      files: The target's `DefaultInfo` files.
+
+    Returns:
+      True when a `.dart` file or a directory is among them.
+    """
+    return any([f.is_directory or f.extension == "dart" for f in files])
+
 def _package_uri(info, f):
     """Returns the `package:` URI of library `f` of `info`'s own package."""
     prefix = (info.lib_root + "/lib/") if info.lib_root else "lib/"
@@ -146,13 +157,18 @@ def _dart_analyzer_summary_impl(target, ctx):
     if not ctx.attr._enabled[BuildSettingInfo].value:
         return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = depset(), packages = depset())]
 
-    # Every target contributes its own package, summarized or not, so a package
-    # with no library of its own is not mistaken for one that is missing.
+    # A target's own package is covered only by a summary that covers it. A
+    # target with sources of its own gets one below, or, for an opaque `srcs_dir`
+    # directory, gets none, so its package stays uncovered and a dependent is
+    # analyzed from source. A target with no sources of its own (a façade of
+    # `deps`) has nothing to cover, so its package is covered.
+    files = target[DefaultInfo].files.to_list()
+    srcs = _own_sources(info, files)
+    own = [package_key(info)] if (srcs or not _has_own_sources(files)) else []
     packages = depset(
-        [package_key(info)],
+        own,
         transitive = [d[DartAnalyzerSummaryInfo].packages for d in deps if DartAnalyzerSummaryInfo in d],
     )
-    srcs = _own_sources(info, target[DefaultInfo].files.to_list())
     if not srcs:
         return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = dependencies, packages = packages)]
 
@@ -160,14 +176,31 @@ def _dart_analyzer_summary_impl(target, ctx):
     summary = ctx.actions.declare_file(name + ".sum")
     config = ctx.actions.declare_file(name + ".package_config.json")
 
+    # The package's own libraries are staged under a root of their own, as
+    # symlinks, and that root is the package's root in the config. The analyzer
+    # maps each `package:` URI to a file under the root, and a generated library
+    # lives in the output tree, not beside the sources. Without the stage an
+    # `export` of a generated library is dropped from the summary, and a
+    # dependent cannot see its declarations (analyzer 13.3).
+    prefix = (info.lib_root + "/lib/") if info.lib_root else "lib/"
+    stage_root = config.dirname + "/" + name + ".summary_root"
+    staged = []
+    for f in srcs:
+        link = ctx.actions.declare_file(name + ".summary_root/lib/" + f.short_path[len(prefix):])
+        ctx.actions.symlink(output = link, target_file = f)
+        staged.append(link)
+
     # The closure's roots, not its sources: a dependency's libraries come from
-    # its summary, so its files are not read and need not be inputs.
+    # its summary, so its files are not read and need not be inputs. The own
+    # package's files are the staged links, under `stage_root`.
+    others = [f for f in info.transitive_srcs.to_list() if not f.short_path.startswith(prefix)]
     ctx.actions.write(
         output = config,
         content = generate_package_config(
             info.transitive_packages.to_list(),
-            info.transitive_srcs.to_list(),
+            others,
             config,
+            roots = {info.package_name: stage_root},
         ),
     )
 
@@ -178,14 +211,14 @@ def _dart_analyzer_summary_impl(target, ctx):
     args.add("--packages", config)
     args.add("--out", summary)
     args.add("--summary", ctx.file._sdk_summary)
-    for f in srcs:
-        args.add("--source", f)
+    for f, link in zip(srcs, staged):
+        args.add("--source", link)
         args.add("--uri", _package_uri(info, f))
     args.add_all(dependencies, before_each = "--summary")
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = depset(direct = srcs + [config, ctx.file._sdk_summary], transitive = [dart_sdk_info.analyze_files, dependencies]),
+        inputs = depset(direct = srcs + staged + [config, ctx.file._sdk_summary], transitive = [dart_sdk_info.analyze_files, dependencies]),
         outputs = [summary],
         mnemonic = "DartAnalyzerSummary",
         progress_message = "Summarizing Dart library %{label}",
