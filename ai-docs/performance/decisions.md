@@ -111,6 +111,25 @@ platform (38 MB each). Replaced with the `package:build_modules` approach:
   file by file, through a per-module sidecar list.
 Remaining compile errors are real errors.
 
+**Modular kernels measured slower; not landing (agent).** With the import-graph
+planner, modular compilation was correct: 263/263 unit tests and all e2e
+passing in both modes. `package:test` was 25 of 32 files, its 7 browser files
+excluded, and 104 of 105 outputs were reproducible. On the benchmark it lost:
+
+| | Clean build | Leaf body edit |
+| --- | --- | --- |
+| Modular | 40.2 s (108 module compiles) | 25.0 s (60 modules + 30 links) |
+| Whole-program | 27.2 s (35 compiles) | 23.3 s (31 compiles) |
+
+Linked test kernels were 2.3x larger: 30 MB vs 13 MB, because a module holds
+every library of its package, and `package:analyzer`'s module alone is 18 MB.
+Causes:
+- no early cutoff, since the VM target has no outlines;
+- every module compile reloads every dependency kernel, because
+  `kernel_worker`'s incremental mode deadlocks the worker.
+The work is kept in the worktree branch, and the planner (directive scanner,
+VM conditional-import resolution) is reusable.
+
 **Next items (user).** Do the analyzer-only SDK file set, drop `bazel_lib`,
 codegen on summaries, and multi-root in the fallback compile.
 
