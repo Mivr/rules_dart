@@ -26,20 +26,40 @@ and CPU totals are the steadier signal. Raw numbers are in `results/`.
 | 15 | `5387726` | `yaml.bzl` dropped: in-repo Starlark parser for pubspec files (parity over 654 real files) | `bazel_lib` and `yaml.bzl` gone from a downstream module graph; pub lock parse 94 → 53 ms |
 | 14 | `8e2e855` | Modular fixes: non-standalone libraries compile from source at the entry; duplicate sources detected per library; entry kernel linked first, so the test's own `main` runs | `ext_exemplar` builds modular; `check_dual_build_collisions_test` passes; outputs reproducible |
 
-Overall, against the original `main` (`3b0470c`):
+Overall: one consolidated run, baseline `3b0470c` then final `main` `b5d9f93`,
+back to back on the same 4-core sandbox (`results/final_base_3b0470c.json`,
+`results/final_main_b5d9f93.json`; `harness/suite.py`, `harness/table.py`).
+Default flags, so modular compiles are on and analyzer summaries are off.
 
-| Metric                                | Baseline         | Now           |
-| ------------------------------------- | ---------------- | ------------- |
-| Re-analysis, 80 packages              | 5.97 s           | 0.89 s        |
-| Per test (`package:test`)             | 0.65 s           | 0.25 s        |
-| Test runfiles                         | 1,073 / 699 MB   | 39 / ~290 MB  |
-| Format checks after a leaf body edit  | 61               | 1             |
-| Clean lint: sandboxed actions         | 1,628–1,692      | 282           |
-| Leaf body edit: compiles re-run       | 31               | 31 (see #7)   |
-| Leaf body edit: analyses re-run       | 61               | 61 (see #8)   |
+| Metric                               | Baseline `3b0470c` | Final `b5d9f93` |
+| ------------------------------------ | ------------------ | --------------- |
+| Re-analysis, 80 packages             | 6.11 s             | 0.85 s          |
+| Clean build wall                     | 23.6 s             | 19.0 s          |
+| Clean build compile CPU              | 69.7 s             | 4.8 s (+ 36 s module kernels, in workers) |
+| Leaf body edit rebuild               | 15.7 s             | 9.2 s           |
+| Leaf body edit: whole compiles re-run | 31                | 1               |
+| Leaf API edit rebuild                | 15.9 s             | 8.5 s           |
+| Null build                           | 0.25 s             | 0.24 s          |
+| 30 `package:test` tests, wall        | 6.0 s              | 2.5 s           |
+| Per test                             | 0.64 s             | 0.24 s          |
+| Test runfiles                        | 1,073 files / 699 MB | 39 / 282 MB   |
+| Clean lint wall                      | 63.5 s             | 42.4 s          |
+| Clean lint: sandboxed actions        | 1,628              | 291             |
+| Clean lint: copy actions             | 1,471              | 122             |
+| Leaf body edit, lint wall            | 50.6 s             | 34.5 s          |
+| Leaf body edit: format checks re-run | 61                 | 1               |
+| Leaf body edit: analyses re-run      | 61                 | 61 (1 with `//dart:analyzer_summaries`, measured in `398116c`) |
 
-A consolidated before/after run on final `main` is still to do: these numbers
-come from separate A/B runs.
+Every compiled output is byte-identical across clean builds and install paths
+(checked per change; see `findings.md`).
+
+What the numbers leave on the table:
+
+- Analysis still re-runs all 61 dependents of a leaf body edit by default;
+  summary mode cuts that to 1 but is opt-in (plan #17 adds what Flutter needs).
+- A lint body edit still re-runs 62 staging copies (13.6 s CPU): each analyzed
+  target copies its main-repository sources into its staged project. Queued as
+  plan #20.
 
 ## In flight (see `in-flight.md`)
 
@@ -54,6 +74,7 @@ come from separate A/B runs.
 | 17 | SDK summary takes an embedder (`_embedder.yaml`, for `dart:ui`); summary mode turns itself off on an SDK newer than its analyzer (asks B, F) | — |
 | 18 | Macro declaring the SDK filegroups and `dart_toolchain` over a path prefix; test that a root-registered toolchain wins without fetching the default SDK (ask E) | — |
 | 19 | `pub.from_lock()` fails on a hosted package without `sha256` (and a git package without `resolved-ref`), shared error text with rules_flutter (ask I) | — |
+| 20 | Stage main-repository sources for analysis in place (as `95089ce` did for pub packages), so a leaf edit stops re-running every dependent's staging copy | — |
 
 ## Dropped
 

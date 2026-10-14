@@ -25,7 +25,8 @@ rows = [
  ("Lint body edit wall (s)", ("lint_body_edit", "wall_s")),
  ("  analyze re-run", ("lint_body_edit", "actions", "DartAnalyze", "n")),
  ("  format re-run", ("lint_body_edit", "actions", "DartFormat", "n")),
- ("  copies re-run", ("lint_body_edit", "actions", "CopyToDirectory", "n")),
+ ("  copies re-run (CopyToDirectory)", ("lint_body_edit", "actions", "CopyToDirectory", "n")),
+ ("  copies re-run (DartCopyTree)", ("lint_body_edit", "actions", "DartCopyTree", "n")),
 ]
 print("| Metric | " + " | ".join(f"{r['label']} ({r['rules_rev']})" for r in runs) + " |")
 print("|---|" + "---|" * len(runs))
