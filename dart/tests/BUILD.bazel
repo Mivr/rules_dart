@@ -20,6 +20,7 @@ load(":toolchain_selection_test.bzl", "toolchain_selection_test_suite")
 load(":toolchains_test.bzl", "toolchains_test_suite")
 load(":versions_test.bzl", "versions_test_suite")
 load(":yaml_parser_test.bzl", "yaml_parser_test_suite")
+load(":yaml_subset_test.bzl", "yaml_subset_test_suite")
 
 versions_test_suite(name = "versions_test")
 
@@ -46,6 +47,8 @@ registry_test_suite(name = "registry_test")
 project_staging_test_suite(name = "project_staging_test")
 
 yaml_parser_test_suite(name = "yaml_parser_test")
+
+yaml_subset_test_suite(name = "yaml_subset_test")
 
 codegen_test_suite(name = "codegen_test")
 

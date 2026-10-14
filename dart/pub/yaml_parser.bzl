@@ -1,15 +1,15 @@
 """Pubspec-shape extractors for pubspec.lock and pubspec.yaml files.
 
-Generic YAML parsing is delegated to `@yaml.bzl//:yaml.bzl`; this module
-just projects the parsed value down to the exact shapes the rules_dart
+Generic YAML parsing is done by `//dart/pub/private:yaml_subset.bzl`; this
+module just projects the parsed value down to the exact shapes the rules_dart
 pub extension and repository rules consume.
 """
 
-load("@yaml.bzl//:yaml.bzl", "yaml")
+load("//dart/pub/private:yaml_subset.bzl", "parse_document")
 
 def _load(content):
     """Parse YAML content into a top-level dict, or None if not a mapping."""
-    data = yaml.get_value(yaml.parse(content))
+    data = parse_document(content)
     return data if type(data) == "dict" else None
 
 def parse_pubspec_lock(content):

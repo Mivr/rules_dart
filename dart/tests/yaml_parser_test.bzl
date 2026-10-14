@@ -98,12 +98,61 @@ def _parse_pubspec_sdk_constraint_test_impl(ctx):
     asserts.equals(env, "", parse_pubspec_sdk_constraint(""))
     return unittest.end(env)
 
+def _parse_lock_flow_description_test_impl(ctx):
+    env = unittest.begin(ctx)
+    result = parse_pubspec_lock("packages:\n  git_dep:\n    description: {name: git_dep, url: \"https://x\"}\n    version: \"1.0.0\"\n")
+    asserts.equals(env, {"name": "git_dep", "url": "https://x"}, result["git_dep"]["description"])
+    asserts.equals(env, "1.0.0", result["git_dep"]["version"])
+    return unittest.end(env)
+
+def _parse_lock_unquoted_version_test_impl(ctx):
+    env = unittest.begin(ctx)
+
+    # An unquoted `1.10` is a float, so str() gives "1.1", as it does with yaml.bzl.
+    result = parse_pubspec_lock("packages:\n  p:\n    version: 1.10\n")
+    asserts.equals(env, "1.1", result["p"]["version"])
+    return unittest.end(env)
+
+def _parse_pubspec_deps_flow_test_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        ["a", "b"],
+        parse_pubspec_deps("name: x\ndependencies: {a: ^1.0.0, b: any}\n"),
+    )
+    asserts.equals(env, [], parse_pubspec_deps("dependencies: []\n"))
+    asserts.equals(env, [], parse_pubspec_deps("- not a mapping\n"))
+    return unittest.end(env)
+
+def _parse_pubspec_sdk_numeric_test_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(env, "3", parse_pubspec_sdk_constraint("environment:\n  sdk: 3\n"))
+    asserts.equals(env, "", parse_pubspec_sdk_constraint("environment:\n  sdk:\n"))
+    asserts.equals(env, "", parse_pubspec_sdk_constraint("environment: 3\n"))
+    return unittest.end(env)
+
 _t0_test = unittest.make(_parse_lock_packages_test_impl)
 _t1_test = unittest.make(_parse_lock_hosted_test_impl)
 _t2_test = unittest.make(_parse_lock_sdk_test_impl)
 _t3_test = unittest.make(_parse_pubspec_deps_test_impl)
 _t4_test = unittest.make(_parse_pubspec_deps_empty_test_impl)
 _t5_test = unittest.make(_parse_pubspec_sdk_constraint_test_impl)
+_t6_test = unittest.make(_parse_lock_flow_description_test_impl)
+_t7_test = unittest.make(_parse_lock_unquoted_version_test_impl)
+_t8_test = unittest.make(_parse_pubspec_deps_flow_test_impl)
+_t9_test = unittest.make(_parse_pubspec_sdk_numeric_test_impl)
 
 def yaml_parser_test_suite(name):
-    small_unittest_suite(name, _t0_test, _t1_test, _t2_test, _t3_test, _t4_test, _t5_test)
+    small_unittest_suite(
+        name,
+        _t0_test,
+        _t1_test,
+        _t2_test,
+        _t3_test,
+        _t4_test,
+        _t5_test,
+        _t6_test,
+        _t7_test,
+        _t8_test,
+        _t9_test,
+    )
