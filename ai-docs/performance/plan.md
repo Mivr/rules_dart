@@ -20,6 +20,7 @@ and CPU totals are the steadier signal. Raw numbers are in `results/`.
 | 9 | `959b7b3` | Modular `dart_test` compiles: per-SCC kernels per `dart_library`, warm `kernel_worker`, reachability-pruned link (`//dart:modular_kernel`) | Clean 22.1 → 19.9 s; leaf body edit 16.5 → 9.3 s; API edit 21.0 → 11.3 s; test kernel 13.0 → 4.2 MB |
 | 7 | `398116c` | Opt-in `//dart:analyzer_summaries`: analysis against per-library summaries; SDK linter vendored  | Leaf body edit: 61 analyses → 1 (44 s → 17 s); flag off unchanged     |
 | 10 | `8a1e20d` | `DartSdkInfo.analyze_files`: analyze, fix, summary and codegen actions get the analyze subset of the SDK | `DartAnalyze` inputs on `//:bad_lib`: 1,082 → 515 (SDK 1,049 → 482) |
+| 13 | `09c5905` | Whole-program `dart_binary` / `dart_test` compile split packages in place (multi-root) instead of copying them into `.pkgsrcs` trees | `e2e/codegen`, modular off: copy actions 8 → 1 (the `dart_source_set`) |
 
 Overall, against the original `main` (`3b0470c`):
 
@@ -40,16 +41,15 @@ come from separate A/B runs.
 
 | #  | Item                                                                                       | State                                                                                                                                                                                                  |
 | -- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 14 | **Regression fix**: modular compile of a `dart_library` that does not compile on its own (found in `e2e/ext_exemplar`) | Agent fixing in the module planner; see `in-flight.md` |
+| 11 | Drop `bazel_lib`: a Dart copy tool behind `//dart:copy_toolchain_type` | Agent implementing |
 | 12 | Codegen on analyzer summaries | Works; 96 generated files byte-identical; 15–45% faster per request. Found a bug in landed summary mode (`srcs_dir` libraries), being fixed first |
-| 13 | Multi-root in the whole-program fallback compile (no colocation copies) | In progress; will list the remaining `copy_to_directory` uses for #11 |
 
 ## Queued (agreed with the user, 2026-10-14)
 
 | #  | Item                                                                                                                                                       | Depends on |
 | -- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| 11 | Drop the `bazel_lib` dependency: a small Dart copy tool replaces `copy_to_directory`, so users stop fetching its toolchains (`bats`, ...)                   | #7, #8     |
 | 12 | `dart_codegen` resolves against analyzer summaries instead of a fresh analyzer over the whole closure                                                      | #8         |
-| 13 | Whole-program fallback compile uses multi-root URIs, so split packages need no copy                                                                        | #7, #9     |
 
 ## Dropped
 

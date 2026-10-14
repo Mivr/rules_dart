@@ -38,8 +38,35 @@ Landed on `main` as `8a1e20d`; see `plan.md` and `for-rules-flutter.md`.
 
 ## Multi-root whole-program compile (plan #13)
 
-The fallback compile (`//dart:modular_kernel=false`, or a library without
-`DartKernelInfo`) names split packages with `org-dartlang-bazel` multi-roots
-instead of copying them into one directory. The remaining `copy_to_directory`
-call sites it finds feed plan #11 (dropping `bazel_lib`).
+Landed on `main` as `09c5905`; see `plan.md` and `for-rules-flutter.md`.
 
+## Regression: libraries that do not compile on their own (plan #14)
+
+Found on `main` after `959b7b3`, with `//dart:modular_kernel` on (the default).
+`e2e/ext_exemplar` `//json_serializable:_advanced_sources` is a sources-only
+`dart_library` whose file imports a package it does not declare and whose
+`part` lives on another target (`:advanced`, which lists the same files).
+Whole-program compiles never built a library alone, so it worked; the modular
+compile builds each library's module and fails ("Couldn't resolve the package
+'json_annotation'"). Whole-program mode still builds it.
+
+Also found: `duplicated_source` cannot see a file listed by two libraries,
+because the closure is a depset and the identical File is deduplicated.
+
+Fix being built: the module planner treats a source as not compilable in the
+module when it imports a package missing from the module's package config, or
+names a `part` that is not among the module's inputs (plus its importers), the
+way it already treats web-only files. The executable's entry module compiles
+such files from source. A dependent that lists the same file compiles it itself.
+
+Why it got through: the reviewing harness's e2e suite skipped `ext_exemplar`,
+whose Gazelle targets need go.dev (blocked in this sandbox). It now builds a
+copy with the Gazelle targets stripped (see `harness/README.md`).
+
+## Drop `bazel_lib` (plan #11)
+
+The only use is `assemble_source_dir` (`copy_to_directory`). Being replaced by
+a `dart:io`-only copy tool behind a new `//dart:copy_toolchain_type`, so the
+public `COPY_TO_DIRECTORY_TOOLCHAINS` / `colocate_*` helpers keep working for
+downstream rule sets unchanged. Acceptance: copied trees byte-identical to
+`copy_to_directory`'s.

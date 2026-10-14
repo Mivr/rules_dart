@@ -59,3 +59,13 @@ diff a.sha b.sha
 ```
 
 Then check one output with `strings -n 8 <file> | grep -c -e linux-sandbox -e /.cache/bazel -e execroot`; a hermetic output gives 0.
+
+## `ext_exemplar` is part of verification
+
+`e2e.py`'s default list cannot build `e2e/ext_exemplar` where go.dev is blocked:
+its root `BUILD.bazel` loads `@gazelle`. `ext_exemplar.py` builds a copy with the
+Gazelle targets stripped. Run it with modular compiles on and off on every change
+to compilation or codegen. It is the widest codegen coverage in the repository
+(json_serializable, freezed, built_value, mockito, drift, stacked, ...), and
+skipping it let a modular-compile regression reach `main` (see `../in-flight.md`).
+

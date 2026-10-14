@@ -112,4 +112,21 @@ filegroup, mirroring the generated one in `dart/repositories.bzl`. A generator
 given as a `.dart` script also takes `runtime_files`, because the `dart`
 launcher runs it through `dartvm` and the kernel service.
 
+### Whole-program compiles copy nothing (`09c5905`)
+
+`dart_binary` and `dart_test` no longer assemble split packages into
+`.pkgsrcs` tree artifacts; the multi-root compile resolves them in place.
+`colocate_executable` (private) is replaced by `executable_inputs`. The public
+`colocate_packages` / `colocate_entrypoint` and `COPY_TO_DIRECTORY_TOOLCHAINS`
+in `dart/utils.bzl` are unchanged; no rule in rules_dart calls them any more.
+`dart_binary`, `dart_test` and `dart_test_kernel` no longer declare the copy
+toolchain.
+
+### Known regression on `main` (being fixed)
+
+With `//dart:modular_kernel` on, a `dart_library` that does not compile on its
+own (an undeclared package import, or a `part` supplied by another target)
+fails the build when an executable reaches it. Workaround until the fix lands:
+`--@rules_dart//dart:modular_kernel=false`. See `in-flight.md`.
+
 ## Coming (not on `main` yet; see `in-flight.md`)
