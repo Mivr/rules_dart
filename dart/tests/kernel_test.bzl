@@ -163,9 +163,80 @@ def _first_per_package_test_impl(ctx):
 
 def _duplicated_source_test_impl(ctx):
     env = unittest.begin(ctx)
-    asserts.equals(env, "a.dart", duplicated_source(["a.dart", "b.dart", "a.dart"]), "a repeated path")
-    asserts.equals(env, None, duplicated_source(["a.dart", "b.dart"]), "no repeat")
-    asserts.equals(env, None, duplicated_source([]), "nothing to repeat")
+    asserts.equals(
+        env,
+        None,
+        duplicated_source([], [], []),
+        "nothing to repeat",
+    )
+    asserts.equals(
+        env,
+        None,
+        duplicated_source(["t.dart"], [("//x:a", "a.dart"), ("//x:b", "b.dart")], []),
+        "distinct sources",
+    )
+    asserts.equals(
+        env,
+        "a.dart",
+        duplicated_source(["a.dart"], [("//x:a", "a.dart")], []),
+        "the executable's own source is also a library's",
+    )
+    asserts.equals(
+        env,
+        None,
+        duplicated_source([], [("//x:a", "a.dart"), ("//x:a", "a.dart")], []),
+        "one library reached by two paths is one library",
+    )
+    asserts.equals(
+        env,
+        None,
+        duplicated_source(
+            [],
+            [("//x:base", "s.dart"), ("//x:top", "s.dart")],
+            [("//x:top", "//x:base")],
+        ),
+        "a library and a dependency that both list the source",
+    )
+    asserts.equals(
+        env,
+        None,
+        duplicated_source(
+            [],
+            [("//x:a", "s.dart"), ("//x:b", "s.dart"), ("//x:c", "s.dart")],
+            [("//x:b", "//x:a"), ("//x:c", "//x:b")],
+        ),
+        "a chain of libraries, each depending on the last",
+    )
+    asserts.equals(
+        env,
+        "s.dart",
+        duplicated_source(
+            [],
+            [("//x:a", "s.dart"), ("//x:b", "s.dart")],
+            [],
+        ),
+        "two libraries with no dependency between them",
+    )
+    asserts.equals(
+        env,
+        "s.dart",
+        duplicated_source(
+            [],
+            [("//x:left", "s.dart"), ("//x:right", "s.dart"), ("//x:base", "b.dart")],
+            [("//x:left", "//x:base"), ("//x:right", "//x:base")],
+        ),
+        "two siblings that share a dependency are still unrelated",
+    )
+    asserts.equals(
+        env,
+        None,
+        duplicated_source(
+            [],
+            [("//x:a", "s.dart"), ("//x:b", "s.dart"), ("//x:c", "other.dart")],
+            [("//x:b", "//x:a"), ("//x:c", "//x:a")],
+        ),
+        "a source shared by a dependent and its dependency alone",
+    )
     return unittest.end(env)
 
 _ELIGIBLE = {

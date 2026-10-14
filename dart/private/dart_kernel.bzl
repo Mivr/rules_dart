@@ -60,6 +60,8 @@ modular, makes every executable that depends on it compile whole-program.""",
         "transitive_kmods": "depset[File], postorder: the module directories of this library and every transitive dependency, dependencies first. A module names them as `--input-kmod`, and an executable's link reads their indexes.",
         "modular": "bool: Whether this closure compiles and links module by module. False when anything in it cannot, and the consumer then compiles whole-program.",
         "closure_excluded": "depset[File]: the `.vm_excluded.txt` sidecar of this library's module and of every module it links against. A dependent module reads them to exclude the sources that import an excluded file.",
+        "owned": "depset[(str, str)]: a `(label, short_path)` for each source of this library and of every library it depends on. An executable finds a source that two libraries list, see `duplicated_source`.",
+        "edges": "depset[(str, str)]: a `(label, dep_label)` for each `dart_library` this library and every library it depends on names as a dependency. Read with `owned`, to tell a source two libraries list one under the other from two that do not depend on each other.",
     },
 )
 
@@ -217,27 +219,76 @@ def first_per_package(records):
         out.append(pkg)
     return out
 
-def duplicated_source(short_paths):
-    """The first `short_path` that appears twice, or None.
+def duplicated_source(own_paths, owned, edges):
+    """The source a modular executable cannot compile, or None.
 
-    The modular link concatenates module kernels, and each one defines the libraries
-    of its sources. A source that two modules both compile, or that the entry
-    module compiles as well as a module does, is defined twice in the linked
-    program. Whole-program compilation merges those by file, so it never saw the
-    problem.
+    Each `dart_library` compiles the sources it lists into its module, and the
+    executable links the modules it reaches. Within one dependency chain the planner
+    in `kernel_module.dart` keeps one definition of a source: a library whose
+    dependency module already defines the source does not compile it again. Two
+    libraries that do not depend on each other each compile their own copy, and the
+    executable would link two kernels that define one library. The frontend refuses
+    that, and a whole-program compile merges the copies by file, so it never saw the
+    problem. Such an executable falls back to whole-program compilation.
+
+    The executable's own sources are compiled by its entry module, which does not
+    dedupe against the libraries, so a source it shares with a library falls back too.
 
     Args:
-      short_paths: The `short_path` of every source that will be compiled.
+      own_paths: The `short_path` of each of the executable's own sources.
+      owned: The `(label, short_path)` of each source of each library in its closure.
+      edges: The `(label, dep_label)` of each `dart_library` dependency in its closure.
 
     Returns:
-      The repeated `short_path`, or None.
+      The `short_path` of the first source that cannot compile modularly, or None.
     """
-    seen = {}
-    for path in short_paths:
-        if path in seen:
+    own = {}
+    for path in own_paths:
+        own[path] = True
+    owners = {}
+    for label, path in owned:
+        if path in own:
             return path
-        seen[path] = True
+        owners.setdefault(path, {})[label] = True
+    reaches = {}
+    for label, dep in edges:
+        reaches.setdefault(label, {})[dep] = True
+    for path in sorted(owners.keys()):
+        labels = sorted(owners[path].keys())
+        for i in range(len(labels)):
+            for j in range(i + 1, len(labels)):
+                first = labels[i]
+                second = labels[j]
+                if not _depends_on(reaches, first, second) and not _depends_on(reaches, second, first):
+                    return path
     return None
+
+def _depends_on(reaches, label, target):
+    """Whether `label` depends on `target`, directly or through other libraries.
+
+    Args:
+      reaches: The `label` -> {dep_label: True} edges of the closure.
+      label: The depending label.
+      target: The label it may depend on.
+
+    Returns:
+      True when `target` is reached from `label` by at least one edge.
+    """
+    visited = {label: True}
+    frontier = [label]
+    for _ in range(len(reaches) + 1):
+        if not frontier:
+            break
+        following = []
+        for current in frontier:
+            for dep in reaches.get(current, {}):
+                if dep == target:
+                    return True
+                if dep not in visited:
+                    visited[dep] = True
+                    following.append(dep)
+        frontier = following
+    return False
 
 def modular_kernel_eligible(
         enabled,
@@ -371,6 +422,8 @@ def no_kernel_module():
         transitive_kmods = depset(order = "postorder"),
         modular = False,
         closure_excluded = depset(),
+        owned = depset(),
+        edges = depset(),
     )
 
 def kernel_module_action(
@@ -450,6 +503,7 @@ def kernel_module_action(
     args.add("--use-incremental-compiler")
     if exclude_non_sources:
         args.add("--exclude-non-sources")
+
     # A module directory is one argument, not its files: `expand_directories` is off.
     args.add_all(dep_kmods, before_each = "--input-kmod", expand_directories = False)
     for s in sources:
@@ -594,10 +648,9 @@ def modular_executable_tools(
     if own_record != None:
         records = [own_record] + records
 
-    closure = collect_transitive_srcs(ctx.attr.deps).to_list()
-    duplicate = duplicated_source(
-        [f.short_path for f in own_files] + [f.short_path for f in closure],
-    )
+    owned = depset(transitive = [k.owned for k in kernels or []]).to_list()
+    edges = depset(transitive = [k.edges for k in kernels or []]).to_list()
+    duplicate = duplicated_source([f.short_path for f in own_files], owned, edges)
 
     eligible = modular_kernel_eligible(
         enabled = enabled,
@@ -685,6 +738,14 @@ def library_kernel_info(ctx, own_record, package_name, lib_root, own_srcs, opaqu
         transitive = [k.transitive_kmods for k in dep_kernels],
     )
     upstream_excluded = depset(transitive = [k.closure_excluded for k in dep_kernels])
+    owned = depset(
+        [(str(ctx.label), f.short_path) for f in own_srcs],
+        transitive = [k.owned for k in dep_kernels],
+    )
+    edges = depset(
+        [(str(ctx.label), str(dep.label)) for dep in ctx.attr.deps],
+        transitive = [k.edges for k in dep_kernels],
+    )
     if not own_srcs:
         # A façade: nothing to compile, but its dependencies' modules still link.
         return DartKernelInfo(
@@ -692,6 +753,8 @@ def library_kernel_info(ctx, own_record, package_name, lib_root, own_srcs, opaqu
             transitive_kmods = dep_closure,
             modular = True,
             closure_excluded = upstream_excluded,
+            owned = owned,
+            edges = edges,
         )
 
     kmod = ctx.actions.declare_directory(ctx.label.name + ".kmod")
@@ -716,4 +779,6 @@ def library_kernel_info(ctx, own_record, package_name, lib_root, own_srcs, opaqu
         transitive_kmods = depset(order = "postorder", direct = [kmod], transitive = [dep_closure]),
         modular = True,
         closure_excluded = depset(direct = [excluded], transitive = [upstream_excluded]),
+        owned = owned,
+        edges = edges,
     )

@@ -154,3 +154,13 @@ dart_binary(
     main = "kernel_module.dart",
     visibility = ["//dart:__subpackages__"],
 )
+
+# The planner's unit tests. They drive `compileModule` with a recording compiler, so
+# they need no `kernel_worker`, and they run the same planner the tool runs.
+dart_test(
+    name = "kernel_module_test",
+    size = "small",
+    srcs = ["kernel_module.dart"],
+    main = "kernel_module_test.dart",
+    deps = ["@ext_pub_deps//:test"],
+)

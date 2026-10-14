@@ -6,15 +6,25 @@
 // from the import graph, by reading each source's directives:
 //
 //  * A file that imports or exports a `dart:` library the VM does not have
-//    (`dart:html`, `dart:js_interop`, ...) is excluded, and so is a file that
-//    imports or exports an excluded file. A `part` shares its library's verdict.
+//    (`dart:html`, `dart:js_interop`, ...) is excluded.
+//  * A file that imports or exports a `package:` URI whose package is not in the
+//    module's package config is excluded, since the module cannot resolve it.
+//  * A file with a `part` directive whose part is not one of the module's own
+//    sources is excluded, since the library cannot compile without its part.
+//  * A file that imports or exports an excluded file is excluded. A `part` shares
+//    its library's verdict.
 //  * A conditional import takes its first `dart.library.X` alternative for a VM
 //    library X, and its default URI otherwise.
 //  * The VM libraries are those of the `vm` platform in the SDK's `libraries.json`,
 //    following its `include`s.
+//  * A source that a dependency module already defines is not compiled again. The
+//    kernels the module links against define it, and the module's dependents link
+//    to that kernel.
 //  * An excluded file is listed in the module's `.vm_excluded.txt` sidecar. A
 //    dependent module reads the sidecars of its whole closure, so the files that
-//    import an excluded file are excluded too.
+//    import an excluded file are excluded too. A dependent that lists the excluded
+//    file among its own sources compiles its own copy, if it can. An excluded file
+//    that some module of the closure defines is not excluded for the closure at all.
 //
 // The module's output is a directory. It holds one kernel per strongly connected
 // component of its own sources (libraries that import each other compile together,
@@ -33,10 +43,10 @@
 // error that can be blamed on an own source drops that source and its importers, and
 // the module compiles once more. Any other error fails at once.
 //
-// An executable's entry module compiles from source every file it reaches that a
-// module excluded, so the compiler reports the genuine VM error exactly as a
-// whole-program compile would. It has no safety net. Its kernel is linked, with the
-// kernels it reaches, by `kernel_link`.
+// An executable's entry module compiles from source every file it reaches that the
+// closure excludes and no module defines, so the compiler reports the genuine VM error
+// exactly as a whole-program compile would. It has no safety net. Its kernel is linked,
+// with the kernels it reaches, by `kernel_link`.
 //
 // With `--persistent_worker` this is a Bazel persistent worker. It keeps one
 // `kernel_worker` child running for its requests, retries included. When the child
@@ -127,7 +137,7 @@ Future<void> main(List<String> argv) async {
   }
   final args = await _expandParamFiles(rest);
   final log = StringBuffer();
-  final code = await _compileModule(
+  final code = await compileModule(
     args,
     _OneShot(dartaotruntime, kernelWorker),
     log,
@@ -165,7 +175,7 @@ Future<void> _serve(
       try {
         final request = _WorkRequest.decode(frame);
         requestId = request.requestId;
-        code = await _compileModule(
+        code = await compileModule(
           request.arguments,
           compiler,
           log,
@@ -188,9 +198,12 @@ Future<void> _serve(
 /// own sources, and an `index.json` that lists them. Returns 0 on success. Returns 1
 /// when a compile fails, with the compiler's output in `log`. Returns 64 when an
 /// argument is missing.
-Future<int> _compileModule(
+///
+/// Public so that a test can drive the planner with a [ModuleCompiler] that records its
+/// arguments, without a `kernel_worker`.
+Future<int> compileModule(
   List<String> rawArgs,
-  _Compiler compiler,
+  ModuleCompiler compiler,
   StringBuffer log,
   List<Uint8List> inputs,
 ) async {
@@ -255,8 +268,21 @@ Future<int> _compileModule(
   }
   await Directory(output).create(recursive: true);
 
+  // A file that a dependency module defines is linked from that module, so this module
+  // neither compiles it nor excludes it. An excluded file in the closure counts only
+  // while no module of the closure defines it: then the module that defines it is the
+  // copy the executable links.
+  final inherited = <String, String>{
+    for (final entry in closure.entries)
+      if (!graph.containsKey(entry.key)) entry.key: entry.value,
+  };
+  final own = <String>[
+    for (final uri in sources)
+      if (!_definedBy(uri, graph, roots)) uri,
+  ];
+
   if (noDrop) {
-    final entry = await _entrySources(sources, closure, roots, files, vm);
+    final entry = await _entrySources(sources, inherited, roots, files, vm);
     const dill = 'entry.dill';
     final outcome = await compiler.run([
       ...base,
@@ -281,16 +307,16 @@ Future<int> _compileModule(
 
   final keys = <String, String>{};
   final plan = _Plan();
-  for (final uri in sources) {
+  for (final uri in own) {
     final key = _keyOfUri(uri, roots);
     if (key == null) continue;
     keys[uri] = key;
     plan.addOwn(key, uri);
   }
-  await _planImports(plan, keys, closure, roots, files, vm, log);
+  await _planImports(plan, keys, inherited, roots, files, vm, log);
 
   var remaining = [
-    for (final uri in sources)
+    for (final uri in own)
       if (!plan.isExcluded(keys[uri])) uri,
   ];
   var retried = false;
@@ -299,7 +325,7 @@ Future<int> _compileModule(
     sccs = _componentsOf(remaining, keys, plan);
     // The kernels this attempt has written, by key. A later component links to them.
     final local = Map<String, _Node>.of(graph);
-    _Outcome? failure;
+    ModuleOutcome? failure;
     var failedUris = const <String>[];
     for (final scc in sccs) {
       final outcome = await compiler.run([
@@ -350,10 +376,10 @@ Future<int> _compileModule(
   // its `package:` URI and its `org-dartlang-bazel` URI, with the reason.
   final lines = StringBuffer()
     ..writeln(
-      '# ${remaining.length} of ${sources.length} sources compile; the others '
+      '# ${remaining.length} of ${own.length} sources compile; the others '
       'are excluded for the VM.',
     );
-  for (final uri in sources) {
+  for (final uri in own) {
     final key = keys[uri];
     final reason = plan.reasonOf(key);
     if (key == null || reason == null) continue;
@@ -594,12 +620,13 @@ class _Plan {
 }
 
 /// Records each own source's imports in `plan`, and excludes the sources a VM
-/// cannot compile: those that import a `dart:` library the VM lacks, or a file that
-/// `closure` lists as excluded.
+/// cannot compile: those that import a `dart:` library the VM lacks, a `package:` that
+/// the module's config does not name, a part that is not an own source, or a file that
+/// `inherited` lists as excluded.
 Future<void> _planImports(
   _Plan plan,
   Map<String, String> keys,
-  Map<String, String> closure,
+  Map<String, String> inherited,
   Map<String, _PackageRoot> roots,
   _Files files,
   Set<String> vm,
@@ -623,8 +650,25 @@ Future<void> _planImports(
         continue;
       }
       final target = _resolveUri(ref.uri, key, roots);
-      if (target == null) continue;
+      if (target == null) {
+        // A `package:` the module's config does not name. Other schemes are not Dart
+        // sources this module can read, and resolve to null without a rule of their own.
+        if (ref.uri.startsWith('package:')) {
+          direct.putIfAbsent(
+            key,
+            () => '${ref.uri} names a package this module does not have',
+          );
+        }
+        continue;
+      }
       plan.addImport(importer: key, target: target);
+      if (ref.isPart && !plan.isOwn(target)) {
+        direct.putIfAbsent(
+          key,
+          () => 'its part ${ref.uri} is not an input of this module',
+        );
+        continue;
+      }
       if (plan.isOwn(target)) {
         plan.addImporter(imported: target, importer: key);
         // A part follows its library both ways.
@@ -632,12 +676,23 @@ Future<void> _planImports(
           plan.addImporter(imported: key, importer: target);
           plan.addImport(importer: target, target: key);
         }
-      } else if (closure.containsKey(target)) {
+      } else if (inherited.containsKey(target)) {
         direct.putIfAbsent(key, () => 'imports ${ref.uri}, which is excluded');
       }
     }
   }
   plan.exclude(direct);
+}
+
+/// Whether the source at `uri` is one a module of the closure defines, so that this
+/// module need not compile it. `graph` holds the keys the closure's modules define.
+bool _definedBy(
+  String uri,
+  Map<String, _Node> graph,
+  Map<String, _PackageRoot> roots,
+) {
+  final key = _keyOfUri(uri, roots);
+  return key != null && graph.containsKey(key);
 }
 
 /// What the entry module compiles, and what it imports.
@@ -1269,8 +1324,8 @@ Future<List<String>> _expandParamFiles(List<String> args) async {
 }
 
 /// The result of one `kernel_worker` run.
-class _Outcome {
-  const _Outcome(this.exitCode, this.output);
+class ModuleOutcome {
+  const ModuleOutcome(this.exitCode, this.output);
 
   final int exitCode;
   final String output;
@@ -1279,23 +1334,23 @@ class _Outcome {
 /// Runs `kernel_worker` with a full argument list. `inputs` are the Bazel
 /// `WorkRequest.inputs` of the request. They are passed on unchanged, so the child
 /// receives the request Bazel would have sent it.
-abstract class _Compiler {
-  Future<_Outcome> run(List<String> args, List<Uint8List> inputs);
+abstract class ModuleCompiler {
+  Future<ModuleOutcome> run(List<String> args, List<Uint8List> inputs);
 
   Future<void> close();
 }
 
 /// One `kernel_worker` process per compile.
-class _OneShot implements _Compiler {
+class _OneShot implements ModuleCompiler {
   _OneShot(this._dartaotruntime, this._kernelWorker);
 
   final String _dartaotruntime;
   final String _kernelWorker;
 
   @override
-  Future<_Outcome> run(List<String> args, List<Uint8List> inputs) async {
+  Future<ModuleOutcome> run(List<String> args, List<Uint8List> inputs) async {
     final result = await Process.run(_dartaotruntime, [_kernelWorker, ...args]);
-    return _Outcome(result.exitCode, '${result.stdout}${result.stderr}');
+    return ModuleOutcome(result.exitCode, '${result.stdout}${result.stderr}');
   }
 
   @override
@@ -1310,7 +1365,7 @@ class _OneShot implements _Compiler {
 /// `WorkResponse` to the request; and after a crash, since the child then never answers
 /// its next request. A compile writes only its own outputs, so repeating it is safe.
 /// A request that fails again on the new child fails the action with both reasons.
-class _Persistent implements _Compiler {
+class _Persistent implements ModuleCompiler {
   _Persistent(
     this._dartaotruntime,
     this._kernelWorker, {
@@ -1339,7 +1394,7 @@ class _Persistent implements _Compiler {
   final _stderr = StringBuffer();
 
   @override
-  Future<_Outcome> run(List<String> args, List<Uint8List> inputs) async {
+  Future<ModuleOutcome> run(List<String> args, List<Uint8List> inputs) async {
     // Digested before the child is written to, so a file that cannot be read fails the
     // request with its reason, not as a child that died.
     final withDigests = await _withDigests(args, inputs);
@@ -1347,7 +1402,7 @@ class _Persistent implements _Compiler {
     if (!first.lost) return first.outcome;
     final second = await _attempt(args, withDigests);
     if (second.lost) {
-      return _Outcome(
+      return ModuleOutcome(
         second.outcome.exitCode,
         'Failed twice, on a fresh kernel_worker each time.\n'
         'First attempt: ${first.outcome.output}\nSecond attempt: '
@@ -1371,7 +1426,7 @@ class _Persistent implements _Compiler {
       if (frame == null) {
         await _reap();
         return _Attempt(
-          _Outcome(1, 'kernel_worker exited before responding.\n$_stderr'),
+          ModuleOutcome(1, 'kernel_worker exited before responding.\n$_stderr'),
           lost: true,
         );
       }
@@ -1381,7 +1436,7 @@ class _Persistent implements _Compiler {
           'it answered request ${response.requestId}, not request $_requestId',
         );
       }
-      final outcome = _Outcome(response.exitCode, response.output);
+      final outcome = ModuleOutcome(response.exitCode, response.output);
       final crashed =
           outcome.exitCode != 0 && outcome.output.contains(_crashMarker);
       if (crashed) await _reap();
@@ -1389,7 +1444,7 @@ class _Persistent implements _Compiler {
     } on TimeoutException {
       await _reap();
       return _Attempt(
-        _Outcome(
+        ModuleOutcome(
           1,
           'kernel_worker did not answer within $_requestTimeout, so it was '
           'killed.\n$_stderr',
@@ -1399,7 +1454,7 @@ class _Persistent implements _Compiler {
     } catch (error) {
       await _reap();
       return _Attempt(
-        _Outcome(
+        ModuleOutcome(
           1,
           'kernel_worker sent bytes that are not a WorkResponse ($error), so it was '
           'killed.\n$_stderr',
@@ -1444,7 +1499,7 @@ class _Persistent implements _Compiler {
 class _Attempt {
   _Attempt(this.outcome, {required this.lost});
 
-  final _Outcome outcome;
+  final ModuleOutcome outcome;
   final bool lost;
 }
 

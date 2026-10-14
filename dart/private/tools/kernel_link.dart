@@ -7,10 +7,16 @@
 // defines, and the keys it imports. The entry's index names the entry kernel and what
 // the entry imports.
 //
-// The link walks the imports from the entry, and writes only the kernels it reaches,
-// each after every kernel it imports, and the entry kernel last. A kernel that nothing
-// reaches is not written, so the VM never loads it. The walk visits imports in sorted
-// order, so the same indexes always link to the same bytes.
+// The link walks the imports from the entry, and writes only the kernels it reaches.
+// The entry kernel comes first, then each dependency kernel after every kernel it
+// imports. A kernel that nothing reaches is not written, so the VM never loads it. The
+// walk visits imports in sorted order, so the same indexes always link to the same
+// bytes.
+//
+// The entry comes first because the VM runs the `main` of the first component that
+// has one, and a dependency's component can have a `main` of its own: a library that
+// defines `main` for its CLI, say. Linking the entry last ran that library's `main`
+// instead of the test's, and the test hung. With the entry first the test's `main` runs.
 //
 // The VM loads a file of concatenated kernels as one program. This is a compiled
 // `dart_binary` of the exec platform, so the link runs without the SDK as an input,
@@ -40,7 +46,8 @@ Future<void> main(List<String> args) async {
   final output = paths[0];
   final entry = (await _kernelsOf(paths[1])).single;
 
-  // The kernel that defines each key. A key is defined once, so the first wins.
+  // The kernel that defines each key. Each key has one definition across a closure, so
+  // which one `putIfAbsent` keeps does not matter; a repeat is reported below.
   final owner = <String, _Kernel>{};
   for (final dir in paths.skip(2)) {
     for (final kernel in await _kernelsOf(dir)) {
@@ -66,10 +73,27 @@ Future<void> main(List<String> args) async {
     final dependency = owner[key];
     if (dependency != null) visit(dependency);
   }
-  order.add(entry);
+  // The module planner gives each library one kernel, so no two kernels that are
+  // linked define the same key. The VM would load both, and the frontend refuses a
+  // kernel set that defines a library twice, so a repeat is a bug to report, not link.
+  final linked = [entry, ...order];
+  final definedBy = <String, _Kernel>{};
+  for (final kernel in linked) {
+    for (final key in kernel.defines) {
+      final other = definedBy[key];
+      if (other != null) {
+        stderr.writeln(
+          'kernel_link: $key is defined by ${other.path} and ${kernel.path}.',
+        );
+        exitCode = 1;
+        return;
+      }
+      definedBy[key] = kernel;
+    }
+  }
 
   final sink = File(output).openWrite();
-  for (final kernel in order) {
+  for (final kernel in linked) {
     await sink.addStream(File(kernel.path).openRead());
   }
   await sink.close();
