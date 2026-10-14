@@ -15,10 +15,10 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-dart_binary(
-    name = "runner_snapshot",
-    compile_mode = "exe",
-    main = "runner_snapshot.dart",
+# Run from source by the exec SDK's `dart`, by `dart_binary` in `jit-snapshot`
+# mode and by `dart_test_runner_snapshot`. See dart/private/dart_compile.bzl.
+exports_files(
+    ["app_jit_snapshot.dart"],
     visibility = ["//dart:__subpackages__"],
 )
 

@@ -22,7 +22,7 @@ load(
     "create_test_executable",
     "gen_kernel_native_assets_action",
     "generate_native_assets_yaml",
-    "generate_package_config",
+    "generate_stable_package_config",
     "resolve_code_assets",
     "runfiles_path",
     "target_dart_abi",
@@ -150,7 +150,7 @@ def _compile_test_kernel(ctx, own, bootstrap):
     package_config = ctx.actions.declare_file(ctx.label.name + ".package_config.json")
     ctx.actions.write(
         output = package_config,
-        content = generate_package_config(packages, compile_srcs, package_config, colocated.roots),
+        content = generate_stable_package_config(packages, compile_srcs, colocated.roots),
     )
 
     if bootstrap:
@@ -202,8 +202,7 @@ def _compile_test_kernel(ctx, own, bootstrap):
     else:
         dart_compile_action(
             ctx = ctx,
-            dart_bin = dart_sdk_info.dart,
-            sdk_files = dart_sdk_info.compile_files,
+            dart_sdk_info = dart_sdk_info,
             main = main_input,
             srcs = compile_srcs,
             package_config = package_config,

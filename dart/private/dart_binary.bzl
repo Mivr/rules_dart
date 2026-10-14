@@ -12,7 +12,7 @@ load(
     "collect_transitive_srcs",
     "gen_kernel_native_assets_action",
     "generate_native_assets_yaml",
-    "generate_package_config",
+    "generate_stable_package_config",
     "resolve_code_assets",
     "target_dart_abi",
 )
@@ -84,7 +84,7 @@ def _dart_binary_impl(ctx):
     package_config = ctx.actions.declare_file(ctx.label.name + ".package_config.json")
     ctx.actions.write(
         output = package_config,
-        content = generate_package_config(packages, all_srcs, package_config, colocated.roots),
+        content = generate_stable_package_config(packages, all_srcs, colocated.roots),
     )
 
     # Determine output filename (Windows gets the `.exe` extension — see
@@ -170,8 +170,7 @@ def _dart_binary_impl(ctx):
     # Run dart compile
     dart_compile_action(
         ctx = ctx,
-        dart_bin = dart_sdk_info.dart,
-        sdk_files = dart_sdk_info.compile_files,
+        dart_sdk_info = dart_sdk_info,
         main = compile_main,
         main_path = compile_main_arg,
         srcs = compile_srcs,
@@ -183,6 +182,7 @@ def _dart_binary_impl(ctx):
         extra_flags = ctx.attr.dart_compile_flags,
         defines = compile_defines,
         recorded_uses = compile_recorded_uses,
+        jit_tool = ctx.file._jit_tool,
     )
 
     # Resources ride the runfiles, not the compile. A dep's `lib/**` non-Dart
@@ -264,13 +264,26 @@ The `dart compile` mode. Determines the output format:
 - `exe` (default): Self-contained native machine code. No Dart SDK needed at runtime. Best for deployment.
 - `aot-snapshot`: AOT-compiled snapshot. Requires `dartaotruntime` to execute. Smaller than `exe`.
 - `kernel`: Dart kernel binary (`.dill`). Requires `dart` to execute. Fastest compilation, useful for development.
-- `jit-snapshot`: JIT snapshot with trained profile data. Requires `dart` to execute. Fastest startup after warmup.
+- `jit-snapshot`: JIT snapshot with trained profile data. Requires `dart` to execute. Fastest startup after warmup. The program is trained once, with no arguments, in a fixed-length scratch directory. The snapshot is reproducible only if that training run is deterministic: a program that reads the clock, random numbers, or files outside the build gives a different snapshot each build. The training runs from a copy of the SDK's `dart` at a fixed path per SDK version, so the snapshot does not depend on where the SDK is installed.
 """,
             default = "exe",
             values = ["exe", "aot-snapshot", "kernel", "jit-snapshot"],
         ),
         "dart_compile_flags": attr.string_list(
-            doc = "Extra flags passed to `dart compile` after compilation-mode defaults. Flags appear last so they can override defaults (e.g., `--extra-gen-snapshot-options=--optimization_level=3`).",
+            doc = """\
+Extra compiler flags, appended after the compilation-mode defaults so they can override them (e.g., `--extra-gen-snapshot-options=--optimization_level=3`).
+
+Each flag goes to the stage that consumes it. A source entrypoint is first compiled to a kernel by `gen_kernel`, the Dart front end, and then by `dart compile`. The front end takes these flags, so they go to `gen_kernel`:
+
+- `--enable-experiment=<name>`, or `--enable-experiment <name>`
+- `-D<KEY=VALUE>`, `--define=<KEY=VALUE>`, or `-D <KEY=VALUE>`, `--define <KEY=VALUE>`
+- `--enable-asserts`
+
+Every other flag goes to `dart compile`. In the `kernel` mode all flags go to `gen_kernel`, which is that mode's compile. For a pre-built kernel, all flags go to `dart compile`. The `jit-snapshot` mode takes no `dart compile` flags, so any other flag there is an error.""",
+        ),
+        "_jit_tool": attr.label(
+            default = "//dart/private/tools:app_jit_snapshot.dart",
+            allow_single_file = True,
         ),
         "defines": attr.string_list(
             doc = "Dart environment declarations (`key=value`). Each entry becomes a `-Dkey=value` flag.",

@@ -24,18 +24,26 @@ code a test takes, and it starts in about 0.12 s. The snapshot is built only
 when the exec and target SDKs are the same `dart`: an app-JIT snapshot is
 accepted only by the VM that wrote it, and the snapshot is written by the exec
 SDK but run by the target SDK in the test. Where they differ, there is no
-snapshot and the kernel is run as before.
+snapshot and the kernel is run as before. It is also not built on Windows,
+where the training run has no fixed-length scratch directory to run in (see
+`app_jit_snapshot.dart`), so the snapshot would depend on the build's path.
 
-`//dart:test_runner_snapshot` turns the snapshot off for the whole build. A
-snapshot holds machine code for the CPU it was trained on, and its action key
-does not record the CPU features that code uses, so a remote cache shared
-between machines with different CPUs could serve one that a CPU cannot run. The
-flag is the way out of that, and out of any other snapshot that misbehaves.
+The training run is `--deterministic` and targets an unknown CPU, and runs with
+the same inputs in the same fixed scratch directory and environment each time,
+from a copy of the SDK's `dart` at a fixed path per SDK version (see
+`app_jit_snapshot.dart`). Those make the snapshot the same across builds and
+across SDK install locations. The baseline-CPU target is meant to let a remote
+cache share it across CPUs. The snapshot's action key does not record the CPU
+features its code uses, so that intent is the only guard against a cache serving
+code a CPU cannot run.
+
+`//dart:test_runner_snapshot` turns the snapshot off for the whole build: the
+kernel runs instead, as before. Use it for a snapshot that misbehaves.
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//dart:providers.bzl", "DartInfo")
-load("//dart/private:common.bzl", "writable_home_env")
+load("//dart/private:common.bzl", "sdk_dartvm", "writable_home_env")
 
 DartTestRunnerInfo = provider(
     doc = "The `package:test` runner built from a `package:test` library.",
@@ -139,7 +147,11 @@ def _dart_test_runner_snapshot_impl(ctx):
     # exec SDK's `dart`, but the test that runs the snapshot uses the target SDK's,
     # so the two must be the same binary. A cross-compile has no such binary, and
     # its tests fall back to the kernel.
-    if not enabled or exec_sdk.dart.path != target_sdk.dart.path:
+    # The training run's scratch directory is `/tmp`, which only a POSIX host has
+    # at a fixed length. A Windows exec host gets no snapshot, and its tests run
+    # the kernel.
+    is_windows = exec_sdk.dart.basename.endswith(".exe")
+    if not enabled or is_windows or exec_sdk.dart.path != target_sdk.dart.path:
         return [
             DefaultInfo(),
             DartTestRunnerSnapshotInfo(snapshot = None),
@@ -148,18 +160,37 @@ def _dart_test_runner_snapshot_impl(ctx):
     runner = _runner_kernel(ctx, ctx.attr.runner)
     training = ctx.attr.training[DartTestKernelInfo]
     snapshot = ctx.actions.declare_file(ctx.label.name + ".jit")
+
+    # `app_jit_snapshot.dart` trains in a scratch directory, where the runner,
+    # the precompiled training test and its source sit at relative paths. The
+    # environment is set here, and nothing else from the action's environment
+    # reaches the training run, so a developer's `DartTest.yaml` cannot change
+    # what the snapshot is trained on.
+    dartvm = sdk_dartvm(exec_sdk)
     args = ctx.actions.args()
-    args.add("--dart", exec_sdk.dart)
-    args.add("--runner", runner)
-    args.add("--precompiled", training.precompiled_dir)
-    args.add("--test-path", training.test_path)
-    args.add("--snapshot", snapshot)
+    args.add(ctx.file._tool)
+    args.add(exec_sdk.dart, format = "--dart=%s")
+    if dartvm != None:
+        args.add(dartvm, format = "--dartvm=%s")
+    args.add("--sdk-version=" + exec_sdk.version)
+    args.add(snapshot, format = "--snapshot=%s")
+    args.add("--enable-asserts")
+    args.add("--env=DART_TEST_CONFIG=none/DartTest.yaml")
+    args.add("--env=TMPDIR=.")
+    args.add("--env=HOME=.")
+    args.add(runner, format = "--copy=runner.dill=%s")
+    args.add(training.precompiled_dir, format = "--copy-tree=precompiled=%s")
+    args.add(training.source, format = "--copy=" + training.test_path + "=%s")
+    args.add("--")
+    args.add("runner.dill")
+    args.add("--precompiled=precompiled")
+    args.add(training.test_path)
     ctx.actions.run(
-        executable = ctx.executable._tool,
+        executable = exec_sdk.dart,
         arguments = [args],
         inputs = depset(
-            direct = [exec_sdk.dart, runner, training.dill, training.source],
-            transitive = [exec_sdk.runtime_files],
+            direct = [ctx.file._tool, exec_sdk.dart, runner, training.dill, training.source] + ([dartvm] if dartvm != None else []),
+            transitive = [exec_sdk.compile_files, exec_sdk.runtime_files],
         ),
         outputs = [snapshot],
         mnemonic = "DartTestRunnerSnapshot",
@@ -184,9 +215,8 @@ dart_test_runner_snapshot = rule(
             providers = [DartTestKernelInfo],
         ),
         "_tool": attr.label(
-            default = "//dart/private/tools:runner_snapshot",
-            executable = True,
-            cfg = "exec",
+            default = "//dart/private/tools:app_jit_snapshot.dart",
+            allow_single_file = True,
         ),
         "_enabled": attr.label(
             default = "//dart:test_runner_snapshot",
@@ -197,5 +227,5 @@ dart_test_runner_snapshot = rule(
         "//dart:toolchain_type",
         "//dart:exec_tools_toolchain_type",
     ],
-    doc = "Runs one training test under the `package:test` runner and keeps the app-JIT snapshot that run writes. Empty where exec and target SDKs differ, or where `--@rules_dart//dart:test_runner_snapshot=false` turns snapshots off.",
+    doc = "Runs one training test under the `package:test` runner and keeps the app-JIT snapshot that run writes. Empty where exec and target SDKs differ, where the exec host is Windows, or where `--@rules_dart//dart:test_runner_snapshot=false` turns snapshots off.",
 )

@@ -1,11 +1,11 @@
 """Tests that `defines` reach the action which runs the Dart front end.
 
 `-D` values are resolved during constant evaluation, so they take effect only
-in the action that compiles source. `dart_binary` splits compilation in two
-when code assets are involved — `gen_kernel` produces the kernel, then
-`dart compile` turns it into an executable — and `dart compile` accepts `-D`
-on a kernel input while silently ignoring it. Nothing fails, the define just
-evaporates, so these tests pin which stage receives the flag in each shape.
+in the action that compiles source. Every source compile runs `gen_kernel`
+first, which produces the kernel, and then `dart compile` turns it into an
+executable — and `dart compile` accepts `-D` on a kernel input while silently
+ignoring it. Nothing fails, the define just evaporates, so these tests pin
+which stage receives the flag in each shape.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
@@ -14,6 +14,7 @@ load("//dart/private:dart_compile.bzl", "defines_stage_error")
 load(":small_suite.bzl", "small_unittest_suite")
 
 _GEN_KERNEL = "DartGenKernelNativeAssets"
+_KERNEL = "DartKernel"
 _DART_COMPILE = "DartCompile"
 
 def _argv_for(env, mnemonic):
@@ -60,17 +61,29 @@ staged_defines_test = analysistest.make(
 )
 
 def _direct_defines_test_impl(ctx):
-    # Without code assets there is one action, which runs the front end itself.
+    # Without code assets the front end runs in the plain `DartKernel` action,
+    # ahead of `dart compile`, which must not repeat the define.
     env = analysistest.begin(ctx)
     flag = "-D" + ctx.attr.expected_define
+    kernel = _argv_for(env, _KERNEL)
     dart_compile = _argv_for(env, _DART_COMPILE)
-    if dart_compile == None:
-        asserts.true(env, False, "expected a %s action, saw %s" % (_DART_COMPILE, _mnemonics(env)))
+    if kernel == None or dart_compile == None:
+        asserts.true(
+            env,
+            False,
+            "expected both a %s and a %s action, saw %s" %
+            (_KERNEL, _DART_COMPILE, _mnemonics(env)),
+        )
         return analysistest.end(env)
     asserts.true(
         env,
-        flag in dart_compile,
-        "%s missing from the compile action: %s" % (flag, dart_compile),
+        flag in kernel,
+        "%s missing from the front-end stage: %s" % (flag, kernel),
+    )
+    asserts.true(
+        env,
+        flag not in dart_compile,
+        "%s must not be repeated on the kernel->exe stage: %s" % (flag, dart_compile),
     )
     asserts.equals(
         env,

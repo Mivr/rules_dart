@@ -540,6 +540,24 @@ def noop_test_executable(ctx, tool):
         runfiles = tool[DefaultInfo].default_runfiles,
     )
 
+def sdk_dartvm(dart_sdk_info):
+    """Returns the SDK's `dartvm` executable File, or None if the SDK has none.
+
+    The app-JIT training runs from a copy of `dart` and `dartvm`, and the
+    compile and runtime file sets both carry `bin/dartvm*` (see
+    `dart/repositories.bzl`), so the file is an action input already.
+
+    Args:
+      dart_sdk_info: The `DartSdkInfo` of the toolchain.
+
+    Returns:
+      The `dartvm` File, or None for an SDK layout without one.
+    """
+    for f in dart_sdk_info.compile_files.to_list():
+        if f.basename == "dartvm":
+            return f
+    return None
+
 def writable_home_env(dart, beside):
     """The environment an SDK build action needs to have a writable home.
 
@@ -734,6 +752,133 @@ def generate_package_config(packages, all_srcs, config_file, roots = {}):
     return '{{\n  "configVersion": 2,\n  "packages": [\n{packages}\n  ]\n}}\n'.format(
         packages = ",\n".join(entries),
     )
+
+# The URI scheme every compile resolves its inputs through. The frontend maps it
+# with `--filesystem-root` (see `gen_kernel_args`), so a file's URI is its
+# repository-relative path and never the absolute sandbox path it was read from.
+STABLE_SCHEME = "org-dartlang-bazel"
+
+def stable_path(path):
+    """Returns the path a stable URI names, for a `short_path` or an exec path.
+
+    A file from another repository has the short path `../repo/x`, and lives at
+    `external/repo/x` under the exec root, where the scheme's roots look.
+
+    Args:
+        path: A `short_path`, or an exec-root-relative path without the bin root.
+
+    Returns:
+        The path with a leading `../` replaced by `external/`.
+    """
+    if path.startswith("../"):
+        return "external/" + path[3:]
+    return path
+
+def stable_entry_path(ctx, exec_path):
+    """Returns the stable path of an entrypoint given by its exec path.
+
+    The entrypoint may be a generated file, so its exec path begins with the
+    bin root; that prefix is what the scheme's second root supplies, and is
+    removed here.
+
+    Args:
+        ctx: The rule context, for its bin directory.
+        exec_path: The entrypoint's exec-root-relative path.
+
+    Returns:
+        The path to append to `STABLE_SCHEME:///`.
+    """
+    prefix = ctx.bin_dir.path + "/"
+    if exec_path.startswith(prefix):
+        exec_path = exec_path[len(prefix):]
+    return stable_path(exec_path)
+
+def generate_stable_package_config(packages, all_srcs, roots = {}):
+    """Generates a package_config.json whose roots are stable scheme URIs.
+
+    `generate_package_config` gives each package an exec-root-relative
+    `rootUri`, which `dart compile` turns into an absolute `file:` URI, so every
+    compiled output embeds the sandbox it was built in. This variant names each
+    package by its `lib_root` under `STABLE_SCHEME`, which `gen_kernel_args`
+    resolves against the exec root and the bin root. A colocated `.pkgsrcs`
+    directory's `lib_root` is its own `short_path`, so it resolves the same way.
+
+    Packages are kept under the same rule as `generate_package_config`: a
+    package with no `.dart` source in `all_srcs` and no `roots` entry is an
+    asset-only pub dependency, and no consumer needs its root.
+
+    Args:
+        packages: List of DartPackageInfo providers.
+        all_srcs: List of File objects from the transitive source closure.
+        roots: Dict of package name to exec-root-relative root for packages
+            whose files no `lib/` file reveals (see `colocate_executable`).
+            Only the keys are read: a package named here is kept.
+
+    Returns:
+        String content of the package_config.json file.
+    """
+    if not packages:
+        return '{"configVersion": 2, "packages": []}\n'
+
+    check_err = check_single_root_package(packages)
+    if check_err:
+        fail(check_err)
+
+    index = package_index(packages)
+    used = {name: True for name in roots}
+    for f in all_srcs:
+        name = package_for_index(f.short_path, index)
+        if name != None:
+            used[name] = True
+
+    entries = []
+    for pkg in packages:
+        if pkg.package_name not in used and pkg.lib_root:
+            continue
+        lv = ""
+        if hasattr(pkg, "language_version") and pkg.language_version:
+            lv = ', "languageVersion": "{lv}"'.format(lv = pkg.language_version)
+        entries.append(
+            '    {{"name": "{name}", "rootUri": "{scheme}:///{root}", "packageUri": "lib/"{lv}}}'.format(
+                name = pkg.package_name,
+                scheme = STABLE_SCHEME,
+                root = stable_path(pkg.lib_root),
+                lv = lv,
+            ),
+        )
+    return '{{\n  "configVersion": 2,\n  "packages": [\n{packages}\n  ]\n}}\n'.format(
+        packages = ",\n".join(entries),
+    )
+
+def gen_kernel_args(ctx, tools, platform, package_config):
+    """Starts the argument list of a `gen_kernel` run whose URIs are stable.
+
+    The two `--filesystem-root`s are relative to the action's working directory,
+    the exec root. The first serves source files and the second the outputs of
+    the bin root, so a generated file resolves the same way a source does. The
+    caller appends the mode flags, `-o`, and the entrypoint as
+    `STABLE_SCHEME:///<stable_entry_path>`.
+
+    Args:
+        ctx: The rule context, for its bin directory.
+        tools: The `find_sdk_kernel_tools` struct.
+        platform: The platform dill File to compile against: the product one
+            for an AOT kernel, the strong one otherwise.
+        package_config: The `package_config.json` File, or None.
+
+    Returns:
+        A `ctx.actions.args()` object beginning with the `gen_kernel` snapshot,
+        which the caller runs with `dartaotruntime`.
+    """
+    args = ctx.actions.args()
+    args.add(tools.gen_kernel_snapshot)
+    args.add("--platform", platform)
+    if package_config != None:
+        args.add("--packages", package_config)
+    args.add("--filesystem-scheme", STABLE_SCHEME)
+    args.add("--filesystem-root", ".")
+    args.add("--filesystem-root", ctx.bin_dir.path)
+    return args
 
 def _exec_root_of(f):
     """Returns the exec-root-relative dir that, prepended to `f.short_path`, yields `f.path`.
@@ -1054,17 +1199,23 @@ def find_sdk_kernel_tools(dart_sdk_info):
     """Locates the gen_kernel toolchain files within the SDK tree.
 
     Returns a struct with the `dartaotruntime` executable, the
-    `gen_kernel_aot.dart.snapshot`, and `vm_platform_strong.dill` Files,
-    found by exact path under the SDK root within `dart_sdk_info.compile_files`.
-    Searching the compile subset rather than `tool_files` means each file found
-    is already an input of the action that runs it, and the search flattens a
-    few dozen files rather than the whole SDK.
+    `gen_kernel_aot.dart.snapshot`, and the `vm_platform_strong.dill` and
+    `vm_platform_product.dill` Files, found by exact path under the SDK root
+    within `dart_sdk_info.compile_files`. Searching the compile subset rather
+    than `tool_files` means each file found is already an input of the action
+    that runs it, and the search flattens a few dozen files rather than the
+    whole SDK.
+
+    The product platform is the one `dart compile exe` builds an AOT kernel
+    against. Built against the strong platform instead, an `exe` comes out about
+    15% larger, because the library set the frontend tree-shakes from differs.
 
     Args:
       dart_sdk_info: The `DartSdkInfo` from the toolchain.
 
     Returns:
-      `struct(dartaotruntime, gen_kernel_snapshot, platform_dill)` of Files.
+      `struct(dartaotruntime, gen_kernel_snapshot, platform_dill,
+      product_platform_dill)` of Files.
     """
     sdk_root = sdk_path_from_dart(dart_sdk_info.dart)
     wanted = {
@@ -1074,10 +1225,11 @@ def find_sdk_kernel_tools(dart_sdk_info):
         ],
         "gen_kernel_snapshot": [sdk_root + "/bin/snapshots/gen_kernel_aot.dart.snapshot"],
         "platform_dill": [sdk_root + "/lib/_internal/vm_platform_strong.dill"],
+        "product_platform_dill": [sdk_root + "/lib/_internal/vm_platform_product.dill"],
     }
     found = {}
 
-    # Analysis-time path probe for 3 files over the small compile subset.
+    # Analysis-time path probe for 4 files over the small compile subset.
     for f in dart_sdk_info.compile_files.to_list():
         for key, paths in wanted.items():
             if f.path in paths:
@@ -1086,13 +1238,14 @@ def find_sdk_kernel_tools(dart_sdk_info):
         if key not in found:
             fail(("find_sdk_kernel_tools: could not locate %s under SDK root " +
                   "%r (Dart %s). The SDK layout may have changed across " +
-                  "versions; native code-asset support needs the AOT " +
-                  "gen_kernel snapshot.") %
+                  "versions; every Dart compile runs the gen_kernel " +
+                  "snapshot.") %
                  (key, sdk_root, dart_sdk_info.version))
     return struct(
         dartaotruntime = found["dartaotruntime"],
         gen_kernel_snapshot = found["gen_kernel_snapshot"],
         platform_dill = found["platform_dill"],
+        product_platform_dill = found["product_platform_dill"],
     )
 
 # Code-asset link mode -> the Dart VM path type it maps to
@@ -1301,10 +1454,12 @@ def gen_kernel_native_assets_action(
     """Runs `gen_kernel --native-assets=<yaml>` to produce a kernel `.dill`.
 
     Invokes `dartaotruntime gen_kernel_aot.dart.snapshot --platform <dill>
-    --packages <pc> --native-assets <yaml> -o <output> <main>`, embedding the
-    code-asset mapping as `vm:ffi:native-assets` metadata. The `.so` files are
-    NOT inputs — gen_kernel only embeds the yaml text; the libraries are a
-    runtime (runfiles) dependency.
+    --packages <pc> --filesystem-* --native-assets <yaml> -o <output>
+    org-dartlang-bazel:///<main>`, embedding the code-asset mapping as
+    `vm:ffi:native-assets` metadata. The entrypoint and every package URI are
+    stable (see `gen_kernel_args`), so the kernel records no sandbox path. The
+    `.so` files are NOT inputs — gen_kernel only embeds the yaml text; the
+    libraries are a runtime (runfiles) dependency.
 
     Args:
       ctx: The rule context.
@@ -1323,16 +1478,12 @@ def gen_kernel_native_assets_action(
     """
     tools = find_sdk_kernel_tools(dart_sdk_info)
 
-    args = ctx.actions.args()
-    args.add(tools.gen_kernel_snapshot)
-    args.add("--platform", tools.platform_dill)
-    if package_config != None:
-        args.add("--packages", package_config)
+    args = gen_kernel_args(ctx, tools, tools.platform_dill, package_config)
     args.add("--native-assets", native_assets_yaml)
     for d in defines:
         args.add("-D" + d)
     args.add("-o", output_dill)
-    args.add(main_path if main_path != None else main)
+    args.add(STABLE_SCHEME + ":///" + stable_entry_path(ctx, main_path if main_path != None else main.path))
 
     direct = [main, native_assets_yaml]
     if package_config != None:

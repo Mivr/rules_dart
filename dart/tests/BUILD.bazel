@@ -2,6 +2,7 @@ load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load(":code_asset_test.bzl", "code_asset_test_suite")
 load(":codegen_test.bzl", "codegen_test_suite")
 load(":common_test.bzl", "common_test_suite")
+load(":compile_flags_test.bzl", "compile_flags_test_suite")
 load(":dart_binary_test.bzl", "dart_binary_test_suite")
 load(":defines_test.bzl", "defines_test_suite")
 load(":language_version_test.bzl", "language_version_test_suite")
@@ -30,6 +31,8 @@ common_test_suite(name = "common_test")
 dart_binary_test_suite(name = "dart_binary_test")
 
 defines_test_suite(name = "defines_test")
+
+compile_flags_test_suite(name = "compile_flags_test")
 
 native_assets_test_suite(name = "native_assets_test")
 
