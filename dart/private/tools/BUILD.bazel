@@ -7,6 +7,18 @@ dart_binary(
     visibility = ["//dart:__subpackages__"],
 )
 
+exports_files(
+    ["runner_training_test.dart"],
+    visibility = ["//visibility:public"],
+)
+
+dart_binary(
+    name = "runner_snapshot",
+    compile_mode = "exe",
+    main = "runner_snapshot.dart",
+    visibility = ["//dart:__subpackages__"],
+)
+
 dart_binary(
     name = "analyze_runner",
     compile_mode = "exe",

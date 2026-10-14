@@ -28,7 +28,7 @@ load(
     "target_dart_abi",
 )
 load("//dart/private:dart_compile.bzl", "dart_compile_action")
-load("//dart/private:dart_test_runner.bzl", "DartTestRunnerInfo")
+load("//dart/private:dart_test_runner.bzl", "DartTestKernelInfo", "DartTestRunnerInfo")
 load("//dart/private:executable_package.bzl", "EXECUTABLE_PACKAGE_ATTRS", "executable_package")
 load("//dart/private:source_set.bzl", "COPY_TO_DIRECTORY_TOOLCHAINS", "colocate_executable")
 
@@ -42,8 +42,83 @@ def _dart_test_impl(ctx):
     # sibling sources (e.g. a `.mocks.dart`), so the build-time compile resolves
     # everything.
     own = executable_package(ctx, [ctx.file.main] + ctx.files.srcs)
+    runner = _test_runner(ctx, own.packages)
+    kernel = _compile_test_kernel(ctx, own, bootstrap = runner != None)
+    dill = kernel.dill
+
+    # Thin launcher: run the self-contained dill with asserts enabled. The dill
+    # carries all sources/imports, so runfiles need only the VM and (for code
+    # assets) the `.so` libraries.
+    env = {
+        "RULES_DART_DART": runfiles_path(dart_sdk_info.dart, workspace_name),
+        "RULES_DART_DILL": runfiles_path(dill, workspace_name),
+    }
+    runner_files = []
+    if runner:
+        # The runner reads the test file for its annotations (`@TestOn`,
+        # `@Timeout`, `@Tags`) and names the suite after it.
+        env["RULES_DART_TEST_RUNNER"] = runfiles_path(runner, workspace_name)
+        env["RULES_DART_TEST_MAIN"] = runfiles_path(ctx.file.main, workspace_name)
+        env["RULES_DART_TEST_PATH"] = _test_path(ctx)
+        runner_files = [runner, ctx.file.main]
+    executable, env_info, tool_runfiles = create_test_executable(
+        ctx,
+        ctx.attr._tool,
+        env = env,
+    )
+
+    # A dep's `lib/**` non-Dart files are part of the package at run time under
+    # pub, and the dill carries only compiled code — so they come in here, the
+    # same way `dart_binary` stages them, and are reached with `rlocation`.
+    #
+    # The test runs its kernel with the launcher and the VM, so it takes only
+    # `runtime_files`. A test that runs SDK commands itself (`dart format`,
+    # `dart compile`) declares `@rules_dart//dart` in `data`, which brings the
+    # whole SDK.
+    runfiles = ctx.runfiles(
+        files = [dill] + kernel.runtime_libs + runner_files + ctx.files.data,
+        transitive_files = depset(
+            transitive = [
+                dart_sdk_info.runtime_files,
+                collect_transitive_resources(ctx.attr.deps),
+            ],
+        ),
+    )
+    runfiles = runfiles.merge(tool_runfiles)
+    for data_dep in ctx.attr.data:
+        runfiles = runfiles.merge(data_dep[DefaultInfo].default_runfiles)
+
+    return [
+        DefaultInfo(executable = executable, runfiles = runfiles),
+        env_info,
+        # See `dart_binary`: analyzable and fixable without becoming a valid
+        # `deps` entry. Built from the pre-colocation `ctx.file.main`, because
+        # the analyze/fix rules stage by `short_path`.
+        own.analyzable,
+    ]
+
+def _compile_test_kernel(ctx, own, bootstrap):
+    """Compiles a test's `main` to the kernel that a test runs from.
+
+    `dart_test` and `dart_test_kernel` both compile through here, so the kernel
+    a runner snapshot is trained on is built exactly as the kernel a test runs
+    is.
+
+    Args:
+      ctx: The rule context, carrying the test attributes.
+      own: The `executable_package` result for the test's own sources.
+      bootstrap: Whether the test runs under `package:test`'s runner, so that
+        the compiled entrypoint is the bootstrap that hands `main` to it. The
+        kernel is then declared where the runner's `--precompiled` layout
+        expects it.
+
+    Returns:
+      `struct(dill, runtime_libs)`: the kernel `.dill` File, and the code-asset
+      libraries that ship in runfiles beside it.
+    """
+    toolchain = ctx.toolchains["//dart:toolchain_type"]
+    dart_sdk_info = toolchain.dart_sdk_info
     packages = own.packages
-    runner = _test_runner(ctx, packages)
 
     hook_err = check_unreplaced_hooks(ctx.label, packages)
     if hook_err != None:
@@ -62,7 +137,7 @@ def _dart_test_impl(ctx):
     main_input = colocated.main_input
     main_arg = colocated.main_arg
     compile_srcs = colocated.srcs
-    if runner:
+    if bootstrap:
         # Under the runner the compiled entrypoint is a bootstrap that hands
         # `main` to `package:test`; the test file itself becomes an input.
         compile_srcs = compile_srcs + [main_input]
@@ -78,7 +153,7 @@ def _dart_test_impl(ctx):
         content = generate_package_config(packages, compile_srcs, package_config, colocated.roots),
     )
 
-    if runner:
+    if bootstrap:
         # Declared where the runner's `--precompiled` layout expects it, so it
         # is loaded in place: code-asset paths are relative to the dill, and a
         # copy elsewhere would leave them pointing at nothing.
@@ -137,56 +212,24 @@ def _dart_test_impl(ctx):
             main_path = main_arg,
             defines = defines,
         )
+    return struct(dill = dill, runtime_libs = runtime_libs)
 
-    # Thin launcher: run the self-contained dill with asserts enabled. The dill
-    # carries all sources/imports, so runfiles need only the VM and (for code
-    # assets) the `.so` libraries.
-    env = {
-        "RULES_DART_DART": runfiles_path(dart_sdk_info.dart, workspace_name),
-        "RULES_DART_DILL": runfiles_path(dill, workspace_name),
-    }
-    runner_files = []
-    if runner:
-        # The runner reads the test file for its annotations (`@TestOn`,
-        # `@Timeout`, `@Tags`) and names the suite after it.
-        env["RULES_DART_TEST_RUNNER"] = runfiles_path(runner, workspace_name)
-        env["RULES_DART_TEST_MAIN"] = runfiles_path(ctx.file.main, workspace_name)
-        env["RULES_DART_TEST_PATH"] = _test_path(ctx)
-        runner_files = [runner, ctx.file.main]
-    executable, env_info, tool_runfiles = create_test_executable(
-        ctx,
-        ctx.attr._tool,
-        env = env,
-    )
+def _dart_test_kernel_impl(ctx):
+    own = executable_package(ctx, [ctx.file.main] + ctx.files.srcs)
+    dill = _compile_test_kernel(ctx, own, bootstrap = True).dill
+    test_path = _test_path(ctx)
 
-    # A dep's `lib/**` non-Dart files are part of the package at run time under
-    # pub, and the dill carries only compiled code — so they come in here, the
-    # same way `dart_binary` stages them, and are reached with `rlocation`.
-    #
-    # The test runs its kernel with the launcher and the VM, so it takes only
-    # `runtime_files`. A test that runs SDK commands itself (`dart format`,
-    # `dart compile`) declares `@rules_dart//dart` in `data`, which brings the
-    # whole SDK.
-    runfiles = ctx.runfiles(
-        files = [dill] + runtime_libs + runner_files + ctx.files.data,
-        transitive_files = depset(
-            transitive = [
-                dart_sdk_info.runtime_files,
-                collect_transitive_resources(ctx.attr.deps),
-            ],
-        ),
-    )
-    runfiles = runfiles.merge(tool_runfiles)
-    for data_dep in ctx.attr.data:
-        runfiles = runfiles.merge(data_dep[DefaultInfo].default_runfiles)
-
+    # The runner's `--precompiled` directory: the kernel's path less the
+    # `/<testPath>.vm_test.vm.app.dill` layout that `dart_test` declares it at.
+    suffix = "/" + test_path + ".vm_test.vm.app.dill"
     return [
-        DefaultInfo(executable = executable, runfiles = runfiles),
-        env_info,
-        # See `dart_binary`: analyzable and fixable without becoming a valid
-        # `deps` entry. Built from the pre-colocation `ctx.file.main`, because
-        # the analyze/fix rules stage by `short_path`.
-        own.analyzable,
+        DefaultInfo(files = depset([dill])),
+        DartTestKernelInfo(
+            dill = dill,
+            precompiled_dir = dill.path[:-len(suffix)],
+            test_path = test_path,
+            source = ctx.file.main,
+        ),
     ]
 
 def _test_runner(ctx, packages):
@@ -282,46 +325,52 @@ def _write_bootstrap(ctx, main_path):
     )
     return bootstrap
 
-dart_test = rule(
-    implementation = _dart_test_impl,
-    attrs = dict({
-        "main": attr.label(
-            doc = "The Dart test file to run. Must contain a top-level `main()` function.",
-            mandatory = True,
-            allow_single_file = [".dart"],
-        ),
-        "srcs": attr.label_list(
-            doc = "Additional Dart source files that are part of this test's package but not reachable via `deps`.",
-            allow_files = [".dart"],
-        ),
-        "deps": attr.label_list(
-            doc = "`dart_library` targets this test depends on.",
-            providers = [DartInfo],
-        ),
-        "data": attr.label_list(
-            doc = "Additional files needed at runtime. These are added to runfiles so they can be resolved via `Runfiles.rlocation()`.",
-            allow_files = True,
-        ),
-        "defines": attr.string_list(
-            doc = """Dart environment declarations (`key=value`). Each entry becomes a `-Dkey=value` \
+# The attributes that define a test's kernel, shared by `dart_test` and
+# `dart_test_kernel` so the two compile the same way.
+_TEST_KERNEL_ATTRS = dict({
+    "main": attr.label(
+        doc = "The Dart test file to run. Must contain a top-level `main()` function.",
+        mandatory = True,
+        allow_single_file = [".dart"],
+    ),
+    "srcs": attr.label_list(
+        doc = "Additional Dart source files that are part of this test's package but not reachable via `deps`.",
+        allow_files = [".dart"],
+    ),
+    "deps": attr.label_list(
+        doc = "`dart_library` targets this test depends on.",
+        providers = [DartInfo],
+    ),
+    "defines": attr.string_list(
+        doc = """Dart environment declarations (`key=value`). Each entry becomes a `-Dkey=value` \
 flag on the build-time compile, so `String.fromEnvironment` resolves to it. Set these here rather \
 than at run time: the test's `main` is compiled to a kernel during the build, and environment \
 declarations are resolved by the front end at that point — the VM cannot supply them later.""",
-        ),
-        "code_assets": attr.label_list(
-            doc = """Native code assets (e.g. `//dart/ext/sqlite3:code_asset`) the test's \
+    ),
+    "code_assets": attr.label_list(
+        doc = """Native code assets (e.g. `//dart/ext/sqlite3:code_asset`) the test's \
 `@Native` FFI bindings resolve against. When set, the test's `main` is compiled to a kernel \
 with the code-asset mapping embedded (`gen_kernel --native-assets`), and the libraries ship in \
 runfiles so the Dart VM resolves them — no `dart:ffi` ceremony in the test source. Each entry \
 must provide `DartCodeAssetInfo` (see the `dart_code_asset` rule).""",
-            providers = [DartCodeAssetInfo],
+        providers = [DartCodeAssetInfo],
+    ),
+}, **dict(WINDOWS_CONSTRAINT_ATTR, **dict(DART_ABI_CONSTRAINT_ATTRS, **dict(EXTRA_DART_DEFINES_ATTR, **EXECUTABLE_PACKAGE_ATTRS))))
+
+dart_test = rule(
+    implementation = _dart_test_impl,
+    attrs = dict(
+        _TEST_KERNEL_ATTRS,
+        data = attr.label_list(
+            doc = "Additional files needed at runtime. These are added to runfiles so they can be resolved via `Runfiles.rlocation()`.",
+            allow_files = True,
         ),
-        "_tool": attr.label(
+        _tool = attr.label(
             default = "//dart/private/tools:test_runner",
             executable = True,
             cfg = "exec",
         ),
-    }, **dict(WINDOWS_CONSTRAINT_ATTR, **dict(DART_ABI_CONSTRAINT_ATTRS, **dict(EXTRA_DART_DEFINES_ATTR, **EXECUTABLE_PACKAGE_ATTRS)))),
+    ),
     test = True,
     toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS,
     doc = (
@@ -329,5 +378,16 @@ must provide `DartCodeAssetInfo` (see the `dart_code_asset` rule).""",
         "asserts enabled. A test with `package:test` in `deps` runs under " +
         "that package's runner, so `--test_filter`, `shard_count` and " +
         "per-case results work and Bazel's `timeout` is the only time limit."
+    ),
+)
+
+dart_test_kernel = rule(
+    implementation = _dart_test_kernel_impl,
+    attrs = _TEST_KERNEL_ATTRS,
+    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS,
+    doc = (
+        "Compiles a test to the kernel that `dart_test` runs under the " +
+        "`package:test` runner, without a runner of its own. " +
+        "`dart_test_runner_snapshot` trains the runner on one of these."
     ),
 )

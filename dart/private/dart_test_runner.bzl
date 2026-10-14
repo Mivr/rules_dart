@@ -15,14 +15,49 @@ repository that provides it: the spoke's public `test` target is a
 `dart_test_package` that forwards the library unchanged and carries the runner
 beside it, and `dart_test` finds the runner on whichever direct dependency is
 `package:test`.
+
+The runner is large, and the VM compiles its kernel again on every test run:
+about 0.37 s of each test's startup. So the spoke also keeps an app-JIT
+snapshot of the runner. It is taken by running one real test under the runner
+(`runner_training_test.dart`, compiled by `dart_test_kernel`), so it holds the
+code a test takes, and it starts in about 0.12 s. The snapshot is built only
+when the exec and target SDKs are the same `dart`: an app-JIT snapshot is
+accepted only by the VM that wrote it, and the snapshot is written by the exec
+SDK but run by the target SDK in the test. Where they differ, there is no
+snapshot and the kernel is run as before.
+
+`//dart:test_runner_snapshot` turns the snapshot off for the whole build. A
+snapshot holds machine code for the CPU it was trained on, and its action key
+does not record the CPU features that code uses, so a remote cache shared
+between machines with different CPUs could serve one that a CPU cannot run. The
+flag is the way out of that, and out of any other snapshot that misbehaves.
 """
 
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//dart:providers.bzl", "DartInfo")
+load("//dart/private:common.bzl", "writable_home_env")
 
 DartTestRunnerInfo = provider(
     doc = "The `package:test` runner built from a `package:test` library.",
     fields = {
-        "runner": "File: the runner, compiled to a kernel (`.dill`).",
+        "runner": "File: the runner the launcher runs — its kernel (`.dill`), or the app-JIT snapshot of it where one was built.",
+    },
+)
+
+DartTestRunnerSnapshotInfo = provider(
+    doc = "The app-JIT snapshot of a `package:test` runner, or `None` where it cannot be built.",
+    fields = {
+        "snapshot": "File or None: the snapshot, written by the exec SDK's `dart`.",
+    },
+)
+
+DartTestKernelInfo = provider(
+    doc = "A test compiled to the kernel that runs under a `package:test` runner.",
+    fields = {
+        "dill": "File: the kernel, declared where the runner's `--precompiled` layout expects it.",
+        "precompiled_dir": "str: the `--precompiled` directory holding `dill`, as an exec-root path.",
+        "test_path": "str: the test's path as the runner names it, under `precompiled_dir`.",
+        "source": "File: the test's source, which the runner reads for its annotations.",
     },
 )
 
@@ -44,15 +79,32 @@ dart_test_runner_main = rule(
     doc = "Writes the entrypoint the `package:test` runner is compiled from.",
 )
 
+def _runner_kernel(ctx, runner):
+    """The `.dill` a kernel-mode `dart_binary` produced.
+
+    Args:
+      ctx: The rule context, for the error message.
+      runner: The `dart_binary` target.
+
+    Returns:
+      The kernel File.
+    """
+    dills = [f for f in runner[DefaultInfo].files.to_list() if f.extension == "dill"]
+    if len(dills) != 1:
+        fail("%s: `runner` must produce exactly one `.dill`, got %s" % (ctx.label, dills))
+    return dills[0]
+
 def _dart_test_package_impl(ctx):
     library = ctx.attr.library
-    runner = [f for f in ctx.attr.runner[DefaultInfo].files.to_list() if f.extension == "dill"]
-    if len(runner) != 1:
-        fail("%s: `runner` must produce exactly one `.dill`, got %s" % (ctx.label, runner))
+    runner = _runner_kernel(ctx, ctx.attr.runner)
+    if ctx.attr.snapshot != None:
+        snapshot = ctx.attr.snapshot[DartTestRunnerSnapshotInfo].snapshot
+        if snapshot != None:
+            runner = snapshot
     return [
         library[DefaultInfo],
         library[DartInfo],
-        DartTestRunnerInfo(runner = runner[0]),
+        DartTestRunnerInfo(runner = runner),
     ]
 
 dart_test_package = rule(
@@ -67,6 +119,83 @@ dart_test_package = rule(
             doc = "A kernel-mode `dart_binary` built from `library`.",
             mandatory = True,
         ),
+        "snapshot": attr.label(
+            doc = "A `dart_test_runner_snapshot` of `runner`. Its snapshot runs in place of the kernel when one was built.",
+            providers = [DartTestRunnerSnapshotInfo],
+        ),
     },
     doc = "`package:test` as a dependency, carrying the runner built from it.",
+)
+
+def _dart_test_runner_snapshot_impl(ctx):
+    target_sdk = ctx.toolchains["//dart:toolchain_type"].dart_sdk_info
+    exec_sdk = ctx.toolchains["//dart:exec_tools_toolchain_type"].dart_sdk_info
+
+    # `//dart:test_runner_snapshot=false` opts the whole build out; see the
+    # module docstring for why a build would.
+    enabled = ctx.attr._enabled[BuildSettingInfo].value
+
+    # An app-JIT snapshot runs only on the VM that wrote it. This action runs the
+    # exec SDK's `dart`, but the test that runs the snapshot uses the target SDK's,
+    # so the two must be the same binary. A cross-compile has no such binary, and
+    # its tests fall back to the kernel.
+    if not enabled or exec_sdk.dart.path != target_sdk.dart.path:
+        return [
+            DefaultInfo(),
+            DartTestRunnerSnapshotInfo(snapshot = None),
+        ]
+
+    runner = _runner_kernel(ctx, ctx.attr.runner)
+    training = ctx.attr.training[DartTestKernelInfo]
+    snapshot = ctx.actions.declare_file(ctx.label.name + ".jit")
+    args = ctx.actions.args()
+    args.add("--dart", exec_sdk.dart)
+    args.add("--runner", runner)
+    args.add("--precompiled", training.precompiled_dir)
+    args.add("--test-path", training.test_path)
+    args.add("--snapshot", snapshot)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = depset(
+            direct = [exec_sdk.dart, runner, training.dill, training.source],
+            transitive = [exec_sdk.runtime_files],
+        ),
+        outputs = [snapshot],
+        mnemonic = "DartTestRunnerSnapshot",
+        progress_message = "Snapshotting the test runner %{label}",
+        env = writable_home_env(exec_sdk.dart, snapshot),
+    )
+    return [
+        DefaultInfo(files = depset([snapshot])),
+        DartTestRunnerSnapshotInfo(snapshot = snapshot),
+    ]
+
+dart_test_runner_snapshot = rule(
+    implementation = _dart_test_runner_snapshot_impl,
+    attrs = {
+        "runner": attr.label(
+            doc = "A kernel-mode `dart_binary` built from `library`, as `dart_test_package`'s `runner`.",
+            mandatory = True,
+        ),
+        "training": attr.label(
+            doc = "A `dart_test_kernel` of the test the runner is trained on.",
+            mandatory = True,
+            providers = [DartTestKernelInfo],
+        ),
+        "_tool": attr.label(
+            default = "//dart/private/tools:runner_snapshot",
+            executable = True,
+            cfg = "exec",
+        ),
+        "_enabled": attr.label(
+            default = "//dart:test_runner_snapshot",
+            providers = [BuildSettingInfo],
+        ),
+    },
+    toolchains = [
+        "//dart:toolchain_type",
+        "//dart:exec_tools_toolchain_type",
+    ],
+    doc = "Runs one training test under the `package:test` runner and keeps the app-JIT snapshot that run writes. Empty where exec and target SDKs differ, or where `--@rules_dart//dart:test_runner_snapshot=false` turns snapshots off.",
 )

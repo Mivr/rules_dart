@@ -1,4 +1,5 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("//dart/private:build_settings.bzl", "dart_defines_flag")
 load("//dart/private:dart_sdk_binary.bzl", "dart_sdk_binary")
 load("//dart/private:resolved_toolchain.bzl", "resolved_toolchain")
@@ -9,6 +10,20 @@ load("//dart/private:resolved_toolchain.bzl", "resolved_toolchain")
 dart_defines_flag(
     name = "extra_dart_defines",
     build_setting_default = [],
+    visibility = ["//visibility:public"],
+)
+
+# Whether `dart_test` runs under an app-JIT snapshot of the `package:test` runner,
+# which starts each test faster than the runner's kernel does. A snapshot holds
+# machine code for the CPU it was trained on, and its action key does not record
+# the CPU features that code uses. A remote cache shared between machines with
+# different CPUs could therefore hand a test a snapshot that needs an instruction
+# its CPU lacks. Turn it off for such a cache, or when a snapshot misbehaves; each
+# test then runs the runner's kernel, as before:
+#   bazel test //... --@rules_dart//dart:test_runner_snapshot=false
+bool_flag(
+    name = "test_runner_snapshot",
+    build_setting_default = True,
     visibility = ["//visibility:public"],
 )
 

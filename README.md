@@ -72,6 +72,13 @@ not reached only through a helper library: the runner comes with that target.
 A test whose `main` does not use `package:test` runs directly, and fails if
 given a filter or shards, because it has no cases to select.
 
+The runner starts from an app-JIT snapshot, trained on one run of it, so each
+test starts faster than from its kernel; the snapshot is skipped when the exec
+and target SDKs differ. Set `--@rules_dart//dart:test_runner_snapshot=false` to
+run the kernel instead, for a remote cache shared between machines with
+different CPUs: a snapshot holds machine code for the CPU it was trained on, and
+its action key does not record the CPU features that code uses.
+
 A `dart_test`'s runfiles carry only the parts of the SDK it needs to run its
 kernel. A test that runs SDK commands itself (`dart format`, `dart compile`)
 declares `@rules_dart//dart` in `data`, which brings the whole SDK.
