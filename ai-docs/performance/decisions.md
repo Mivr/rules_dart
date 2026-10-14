@@ -130,6 +130,20 @@ Causes:
 The work is kept in the worktree branch, and the planner (directive scanner,
 VM conditional-import resolution) is reusable.
 
+**Modular at library granularity (user).** Build each small library on its own
+and link only what is reachable; add worker-side reuse if needed. Implemented
+as follows (agent):
+- one Bazel action per `dart_library`, compiling each library SCC into its own
+  kernel inside a tree artifact, with an index of defined and imported URIs;
+- `kernel_link` walks reachability from the test's entry and concatenates only
+  the reachable SCC kernels;
+- `kernel_worker`'s `--reuse-compiler-result` keeps the platform and dependency
+  kernels loaded, with its stdout-corruption bug fixed at the root.
+Gates to land: linked kernel within ~10% of whole-program size, faster clean
+build and body edit, reproducible, bounded worker memory. Barrel files
+(`pkg.dart` re-exporting everything) limit the body-edit win: every importer
+of the barrel still recompiles.
+
 **Next items (user).** Do the analyzer-only SDK file set, drop `bazel_lib`,
 codegen on summaries, and multi-root in the fallback compile.
 
