@@ -8,7 +8,10 @@ dart_binary(
 )
 
 exports_files(
-    ["runner_training_test.dart"],
+    [
+        "noop.dart",
+        "runner_training_test.dart",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -24,6 +27,21 @@ dart_binary(
     compile_mode = "exe",
     main = "analyze_runner.dart",
     visibility = ["//dart:__subpackages__"],
+)
+
+# The analyzer-summary mode of `dart_analyze`: summarizes one package, and checks
+# a staged project against summaries. See dart/private/dart_analyzer_summary.bzl.
+dart_binary(
+    name = "analyzer_summary",
+    code_assets_from_deps = False,
+    compile_mode = "exe",
+    main = "analyzer_summary.dart",
+    visibility = ["//dart:__subpackages__"],
+    deps = [
+        "//third_party/dart_linter:linter",
+        "@ext_pub_deps//:analyzer",
+        "@ext_pub_deps//:path",
+    ],
 )
 
 dart_binary(

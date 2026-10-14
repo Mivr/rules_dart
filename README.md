@@ -488,6 +488,29 @@ bazel build //:fix --output_groups=+dart_fix_manifest  # what was fixed, and wha
 bazel build //:fix --output_groups=+dart_fix_fixes     # the fixed files themselves
 ```
 
+#### Analyzer summaries (opt-in)
+
+`--@rules_dart//dart:analyzer_summaries=true` changes how `dart_analyze` checks a
+target. Each dependency is summarized once, as its declarations without function
+bodies, and the target is checked against those summaries rather than against
+its dependencies' source. The check is faster, and a body edit in a library no
+longer re-checks the libraries above it. Turn it on in `.bazelrc`:
+
+```
+# .bazelrc
+common --@rules_dart//dart:analyzer_summaries=true
+```
+
+The trade-off: the diagnostics come from rules_dart's pinned `package:analyzer`
+(13.3.0), not from the SDK's `dart analyze`, so they can differ from the IDE's.
+The lint rules are the SDK's own linter, vendored in `third_party/dart_linter`
+from the commit that published that analyzer. On the CI red paths the
+diagnostics matched `dart analyze` line for line. The vendored set lacks
+`migrate_design_widgets` relative to SDK 3.13.5. When the SDK moves ahead of the
+pinned analyzer, diagnostics can drift, and the re-vendored linter has to be
+updated with the pin. `dart fix` still runs on the SDK, and the format check is
+unchanged.
+
 #### Checking targets `//...` does not reach
 
 The `.bazelrc` setup checks the targets a test run names, so it never reaches a

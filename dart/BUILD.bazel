@@ -27,6 +27,25 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Whether `dart_analyze` checks each target against per-library summaries of its
+# dependencies, rather than analyzing the dependencies' source again. It is
+# faster, and a body edit in a library stops re-analyzing the libraries above it,
+# since a summary holds no function bodies. Turn it on in `.bazelrc`:
+#   common --@rules_dart//dart:analyzer_summaries=true
+#
+# The diagnostics come from rules_dart's pinned `package:analyzer`, 13.3.0, with
+# the lint rules of the SDK linter vendored in //third_party/dart_linter (the
+# commit that published that analyzer). On the CI red paths they matched
+# `dart analyze` line for line. The vendored set lacks `migrate_design_widgets`
+# relative to SDK 3.13.5. Once the SDK moves ahead of the pin, diagnostics can
+# drift from the SDK's `dart analyze`. `dart fix` still runs on the SDK. The
+# default is off, and that keeps each check exactly as `dart analyze` runs it.
+bool_flag(
+    name = "analyzer_summaries",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
 # This is the target rule authors should put in their "toolchains"
 # attribute in order to get a runtime for the correct platform.
 # See https://docs.bazel.build/versions/main/toolchains.html#writing-rules-that-use-toolchains

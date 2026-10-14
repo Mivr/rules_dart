@@ -288,7 +288,7 @@ def external_package_placement(ext_pkgs, ext_files_by_pkg):
             copied.append(pkg_name)
     return struct(roots = roots, copied = copied)
 
-def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = None, sdk_version = "", copy_external = True):
+def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = None, sdk_version = "", copy_external = True, all_packages_named = False):
     """Stages packages and sources into a hermetic Dart project layout.
 
     Args:
@@ -311,6 +311,12 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
         in True. Use False wherever the staged project is read from the exec
         root by an action, and True where it is read from runfiles (see the
         module docstring).
+      all_packages_named: True names every external package in the
+        `package_config.json`, not only those with files staged. A package
+        with none is referenced at its exec-root directory, which holds no
+        files the project reads; the analyzer resolves its libraries from
+        summaries instead. Default False: the config names only what is
+        staged, as before.
 
     Returns:
       struct(
@@ -380,6 +386,15 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
         placement = external_package_placement(ext_pkgs, ext_files_by_pkg)
         ext_roots = placement.roots
         copied = placement.copied
+
+    if all_packages_named:
+        if copy_external:
+            fail("all_packages_named needs copy_external = False: a copied package has its own tree")
+        for pkg in ext_pkgs:
+            if pkg.package_name in ext_staged:
+                continue
+            ext_staged[pkg.package_name] = True
+            ext_roots[pkg.package_name] = "external/" + pkg.lib_root[len("../"):]
 
     for pkg_name, files in ext_files_by_pkg.items():
         if pkg_name in copied:
