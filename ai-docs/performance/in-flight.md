@@ -36,32 +36,9 @@ build on `main`, not on this.
 - **Not modular**: `dart_binary` in any mode. A `_kernel_link` attr on
   `dart_binary` would make a cycle.
 
-## Analyzer summaries, opt-in (plan #8)
+## Analyzer summaries
 
-- **Shape**: flag `//dart:analyzer_summaries`, default off.
-  - Aspect `dart_analyzer_summary` (`dart/private/dart_analyzer_summary.bzl`)
-    propagates along `deps` and `library`. It provides
-    `DartAnalyzerSummaryInfo`.
-  - `dart_analyze` `requires` it, and in summary mode stages only the target's
-    own files.
-  - Tool: `dart/private/tools/analyzer_summary.dart`, with modes `sdk`,
-    `summarize` and `analyze`. It prints diagnostics in `dart analyze`'s format.
-- **Done**: summaries work; non-lint diagnostics match `dart analyze` word for
-  word (`unused_local_variable` at the same position, same text). Leaf body edit:
-  1 summary + 1 analysis re-run instead of 61.
-- **Blocked: lint rules.** `third_party/dart_linter/` (SDK `pkg/linter/lib` at
-  tag 3.13.5, commit `04bcd1036cdc799ac6564988f159ee454d42c822`, unmodified,
-  BSD-3) is vendored in the worktree. It does not compile against analyzer
-  13.3.0: 135 errors. A separate hub on analyzer 14.1.0 is impossible, because
-  rules_dart's `pub` extension allows one version of each package per module
-  (`_fe_analyzer_shared has conflicting versions`). Moving the whole module to
-  14.1.0 breaks `go_router_builder` resolution and changes 97 shim dependency
-  versions. **Resolved**: re-vendor from SDK commit `dbeb7e1` (the analyzer
-  13.3.0 publish commit). Its linter compiles against the pinned analyzer, and
-  its rule set differs from SDK 3.13.5's by one rule (`migrate_design_widgets`).
-  See `decisions.md`. Being wired in now.
-- **Needs**, before landing: a `MODULE.bazel.lock` refresh if a hub is added,
-  and the CI analysis red paths passing with the flag on.
+Landed on `main` as `398116c`; see `plan.md`.
 
 ## Reproducible outputs (plan #9)
 

@@ -16,6 +16,7 @@ and CPU totals are the steadier signal. Raw numbers are in `results/`.
 | 4 | `de52390` | `package:test` runner started from an app-JIT snapshot (`//dart:test_runner_snapshot`)           | Per test: 0.55 s → 0.25 s                                             |
 | 5 | `95089ce` | Staged projects reference pub packages in place instead of copying them per target               | Clean lint: 1,692 → 282 sandboxed actions, 1,532 → 122 copies         |
 | 6 | `4445fa1` | `MODULE.bazel.lock` refresh: fixes the regression #4 introduced (see `decisions.md`)            | `--lockfile_mode=error` builds pass again                             |
+| 7 | `398116c` | Opt-in `//dart:analyzer_summaries`: analysis against per-library summaries; SDK linter vendored  | Leaf body edit: 61 analyses → 1 (44 s → 17 s); flag off unchanged     |
 
 Overall, against the original `main` (`3b0470c`):
 
@@ -37,7 +38,6 @@ come from separate A/B runs.
 | #  | Item                                                                                       | State                                                                                                                                                                                                  |
 | -- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 7  | Modular kernel compilation: one module per `dart_library`, tests link by concatenation     | **Not landing.** Correct, but slower on the benchmark (clean 40 s vs 27 s; body edit 25 s vs 23 s) and 2.3x larger kernels. See `decisions.md`. |
-| 8  | Analyzer summaries, opt-in (`//dart:analyzer_summaries`)                                    | Works; leaf body edit runs 1 analysis instead of 61 (44 s → 17 s). Lint rules are being added: SDK `pkg/linter` vendored, analyzer 14.1.0 hub.                                                         |
 | 9  | Reproducible outputs: stable `org-dartlang-bazel:///` URIs via `gen_kernel`; deterministic snapshot training | Started. All 34 compiled outputs currently differ between clean builds.                                                                                                                 |
 
 ## Queued (agreed with the user, 2026-10-14)
