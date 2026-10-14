@@ -171,7 +171,7 @@ def _dart_binary_impl(ctx):
     dart_compile_action(
         ctx = ctx,
         dart_bin = dart_sdk_info.dart,
-        sdk_files = dart_sdk_info.tool_files,
+        sdk_files = dart_sdk_info.compile_files,
         main = compile_main,
         main_path = compile_main_arg,
         srcs = compile_srcs,

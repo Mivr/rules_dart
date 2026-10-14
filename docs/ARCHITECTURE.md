@@ -14,7 +14,7 @@
 
 | Provider                  | Level        | Purpose                                                                                                                            |
 | ------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `DartSdkInfo`             | Toolchain    | SDK binaries (`dart`, `dartaotruntime`), SDK root, version, tool_files                                                             |
+| `DartSdkInfo`             | Toolchain    | SDK binaries (`dart`, `dartaotruntime`), SDK root, version, tool_files, compile_files, runtime_files                               |
 | `DartInfo`                | Library      | Package name, lib_root, transitive_srcs, transitive_resources, transitive_packages, transitive_code_asset_files                    |
 | `DartPackageInfo`         | Metadata     | One package's name, lib_root, version, language version, code assets, unreplaced build-hook path, link hook (in DartInfo depsets)  |
 | `DartPackageMetadataInfo` | Declaration  | The name and language version a `dart_package_metadata` states, read back through an attribute by every rule building that package |

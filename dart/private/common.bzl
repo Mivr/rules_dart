@@ -1041,7 +1041,10 @@ def find_sdk_kernel_tools(dart_sdk_info):
 
     Returns a struct with the `dartaotruntime` executable, the
     `gen_kernel_aot.dart.snapshot`, and `vm_platform_strong.dill` Files,
-    found by exact path under the SDK root within `dart_sdk_info.tool_files`.
+    found by exact path under the SDK root within `dart_sdk_info.compile_files`.
+    Searching the compile subset rather than `tool_files` means each file found
+    is already an input of the action that runs it, and the search flattens a
+    few dozen files rather than the whole SDK.
 
     Args:
       dart_sdk_info: The `DartSdkInfo` from the toolchain.
@@ -1060,8 +1063,8 @@ def find_sdk_kernel_tools(dart_sdk_info):
     }
     found = {}
 
-    # Analysis-time path probe for 3 files; a legitimate one-time flatten.
-    for f in dart_sdk_info.tool_files.to_list():
+    # Analysis-time path probe for 3 files over the small compile subset.
+    for f in dart_sdk_info.compile_files.to_list():
         for key, paths in wanted.items():
             if f.path in paths:
                 found[key] = f
@@ -1320,7 +1323,7 @@ def gen_kernel_native_assets_action(
     direct = [main, native_assets_yaml]
     if package_config != None:
         direct.append(package_config)
-    transitive = [dart_sdk_info.tool_files]
+    transitive = [dart_sdk_info.compile_files]
     if transitive_srcs != None:
         transitive.append(transitive_srcs)
 

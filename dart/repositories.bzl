@@ -57,10 +57,71 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The SDK files `dart compile`, `gen_kernel` and `dart format` read. Those
+# actions take this set as inputs instead of all of `sdk_root`: every input is
+# symlinked into the sandbox and, remotely, hashed and uploaded, so about 15
+# files beat 1,049. The patterns are generous so older SDK layouts and
+# macOS/Windows names match; `allow_empty` lets a pattern that names nothing on
+# this SDK pass.
+filegroup(
+    name = "compile_files",
+    srcs = glob(
+        [
+            "bin/dart",
+            "bin/dart.exe",
+            "bin/dart.sym",
+            "bin/dartvm*",
+            "bin/dartaotruntime*",
+            "bin/*.dll",
+            "bin/utils/**",
+            "bin/snapshots/dartdev*",
+            "bin/snapshots/gen_kernel*",
+            "bin/snapshots/frontend_server*",
+            "bin/snapshots/kernel-service*",
+            "bin/snapshots/kernel_worker*",
+            "lib/_internal/vm_platform*.dill",
+            "lib/_internal/allowed_experiments.json",
+            "lib/libraries.json",
+            "version",
+            "revision",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# The SDK files a test needs to run a compiled kernel: the launcher and the VM
+# that runs it. A test's runfiles take this set instead of all of `sdk_root`.
+# The kernel-service snapshot and platform dill keep `Isolate.spawnUri` working
+# on `.dart` sources.
+filegroup(
+    name = "runtime_files",
+    srcs = glob(
+        [
+            "bin/dart",
+            "bin/dart.exe",
+            "bin/dart.sym",
+            "bin/dartvm*",
+            "bin/*.dll",
+            "bin/snapshots/dartdev*",
+            "bin/snapshots/kernel-service*",
+            "lib/_internal/vm_platform*.dill",
+            "lib/_internal/allowed_experiments.json",
+            "lib/libraries.json",
+            "version",
+            "revision",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
 dart_toolchain(
     name = "dart_toolchain",
     dart = "{dart_bin}",
     sdk_root = ":sdk_root",
+    compile_files = ":compile_files",
+    runtime_files = ":runtime_files",
     version = "{version}",
 )
 """.format(
@@ -79,6 +140,8 @@ dart_toolchain(
     name = "dart_toolchain_cross_{target_platform}",
     dart = "{dart_bin}",
     sdk_root = ":sdk_root",
+    compile_files = ":compile_files",
+    runtime_files = ":runtime_files",
     version = "{version}",
     target_os = "{target_os}",
     target_arch = "{target_arch}",

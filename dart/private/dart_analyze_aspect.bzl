@@ -302,6 +302,10 @@ def _format(ctx, name, staged, sdk_inputs, own_paths, language_version):
     its language version from the command line. Staging the dependencies too,
     as the analyzer needs, would make every edit to one of them re-run this
     check on every target above it, with nothing it reads changed.
+
+    `sdk_inputs` is the compile subset of the SDK, not the whole of it: the
+    formatter opens only the files `dart compile` does, and every input is
+    symlinked into the sandbox and, remotely, hashed and uploaded.
     """
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
     manifest = ctx.actions.declare_file(name + ".format_manifest")
@@ -379,6 +383,11 @@ def _dart_analyze_aspect_impl(target, ctx):
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
     sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.tool_files])
 
+    # The formatter reads no more of the SDK than the compiler does, so it takes
+    # the compile subset: far fewer action inputs. The analyzer reads the SDK's
+    # `lib/` sources, so `_analyze` and the fix action keep all of `tool_files`.
+    format_sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.compile_files])
+
     tags = getattr(ctx.rule.attr, "tags", [])
     groups = {}
     if NO_ANALYZE_TAG not in tags:
@@ -391,7 +400,7 @@ def _dart_analyze_aspect_impl(target, ctx):
                 ctx,
                 name if len(by_version) == 1 else "%s.%s" % (name, version or "latest"),
                 format_staged,
-                sdk_inputs,
+                format_sdk_inputs,
                 paths,
                 version,
             )

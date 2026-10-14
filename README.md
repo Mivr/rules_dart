@@ -72,6 +72,10 @@ not reached only through a helper library: the runner comes with that target.
 A test whose `main` does not use `package:test` runs directly, and fails if
 given a filter or shards, because it has no cases to select.
 
+A `dart_test`'s runfiles carry only the parts of the SDK it needs to run its
+kernel. A test that runs SDK commands itself (`dart format`, `dart compile`)
+declares `@rules_dart//dart` in `data`, which brings the whole SDK.
+
 ### Using pub.dev packages
 
 Declare individual packages with `pub.package()`:

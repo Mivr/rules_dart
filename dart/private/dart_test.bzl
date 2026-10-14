@@ -128,7 +128,7 @@ def _dart_test_impl(ctx):
         dart_compile_action(
             ctx = ctx,
             dart_bin = dart_sdk_info.dart,
-            sdk_files = dart_sdk_info.tool_files,
+            sdk_files = dart_sdk_info.compile_files,
             main = main_input,
             srcs = compile_srcs,
             package_config = package_config,
@@ -162,11 +162,16 @@ def _dart_test_impl(ctx):
     # A dep's `lib/**` non-Dart files are part of the package at run time under
     # pub, and the dill carries only compiled code — so they come in here, the
     # same way `dart_binary` stages them, and are reached with `rlocation`.
+    #
+    # The test runs its kernel with the launcher and the VM, so it takes only
+    # `runtime_files`. A test that runs SDK commands itself (`dart format`,
+    # `dart compile`) declares `@rules_dart//dart` in `data`, which brings the
+    # whole SDK.
     runfiles = ctx.runfiles(
         files = [dill] + runtime_libs + runner_files + ctx.files.data,
         transitive_files = depset(
             transitive = [
-                dart_sdk_info.tool_files,
+                dart_sdk_info.runtime_files,
                 collect_transitive_resources(ctx.attr.deps),
             ],
         ),

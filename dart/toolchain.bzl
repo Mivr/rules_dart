@@ -7,6 +7,8 @@ DartSdkInfo = provider(
         "sdk_root": "Target: The root directory of the SDK, containing `lib/` and `bin/`.",
         "version": "str: The SDK version string (e.g. `3.11.0`).",
         "tool_files": "depset[File]: All files needed to run the SDK. Pass as a `transitive` entry to action inputs / `ctx.runfiles(transitive_files = ...)`; flatten only to inspect paths.",
+        "compile_files": "depset[File]: The SDK files `dart compile`, `gen_kernel` and `dart format` read. A subset of `tool_files`; equal to it when the toolchain names none.",
+        "runtime_files": "depset[File]: The SDK files a test needs at run time to run a compiled kernel. A subset of `tool_files`; equal to it when the toolchain names none.",
         "target_os": "str: Cross-compilation target OS (`macos`, `linux`, `windows`), or empty for native.",
         "target_arch": "str: Cross-compilation target architecture (`x64`, `arm64`), or empty for native.",
     },
@@ -16,11 +18,25 @@ def _dart_toolchain_impl(ctx):
     sdk_root = ctx.attr.sdk_root
     tool_files = ctx.attr.sdk_root.files
 
+    # A toolchain that names no `compile_files` or `runtime_files` keeps the
+    # whole SDK for those uses. That is always correct, if slower: a toolchain a
+    # rule set declares itself may not know which SDK files the compiler reads.
+    if ctx.attr.compile_files != None:
+        compile_files = ctx.attr.compile_files.files
+    else:
+        compile_files = tool_files
+    if ctx.attr.runtime_files != None:
+        runtime_files = ctx.attr.runtime_files.files
+    else:
+        runtime_files = tool_files
+
     dart_sdk_info = DartSdkInfo(
         dart = ctx.file.dart,
         sdk_root = sdk_root,
         version = ctx.attr.version,
         tool_files = tool_files,
+        compile_files = compile_files,
+        runtime_files = runtime_files,
         target_os = ctx.attr.target_os,
         target_arch = ctx.attr.target_arch,
     )
@@ -53,8 +69,14 @@ dart_toolchain = rule(
             allow_single_file = True,
         ),
         "sdk_root": attr.label(
-            doc = "A filegroup containing all SDK files. Used as action inputs when invoking the compiler.",
+            doc = "A filegroup containing all SDK files. Used for runfiles and for actions that need the whole SDK; compile and format actions use `compile_files`.",
             mandatory = True,
+        ),
+        "compile_files": attr.label(
+            doc = "A filegroup of the SDK files `dart compile`, `gen_kernel` and `dart format` read; a subset of `sdk_root`. Leave unset to use all of `sdk_root` for those actions too.",
+        ),
+        "runtime_files": attr.label(
+            doc = "A filegroup of the SDK files a test needs at run time to run a compiled kernel; a subset of `sdk_root`. Leave unset to use all of `sdk_root` for test runfiles too.",
         ),
         "version": attr.string(
             doc = "The SDK version string (e.g. `3.11.0`).",
