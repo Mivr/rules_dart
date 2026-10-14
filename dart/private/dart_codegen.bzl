@@ -93,7 +93,12 @@ def _dart_codegen_impl(ctx):
     identity = resolve_package_identity(ctx)
     toolchain = ctx.toolchains["//dart:exec_tools_toolchain_type"]
     dart = toolchain.dart_sdk_info.dart
-    sdk_files = toolchain.dart_sdk_info.tool_files
+
+    # The shim reads what the analyzer reads: the analyze subset. A `generator`
+    # script is run by the `dart` launcher, which also loads `dartvm` and the
+    # kernel service, so that branch takes the runtime subset as well.
+    sdk_files = toolchain.dart_sdk_info.analyze_files
+    script_sdk_files = depset(transitive = [sdk_files, toolchain.dart_sdk_info.runtime_files])
 
     if ctx.file.generator and ctx.executable.generator_bin:
         fail("%s: only one of `generator` or `generator_bin` may be set." %
@@ -205,7 +210,7 @@ def _dart_codegen_impl(ctx):
             arguments = [args],
             inputs = depset(
                 direct = direct_inputs,
-                transitive = _transitive(library_dep_srcs) + [sdk_files],
+                transitive = _transitive(library_dep_srcs) + [script_sdk_files],
             ),
             outputs = outputs,
             mnemonic = "DartCodegen",

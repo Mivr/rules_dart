@@ -121,7 +121,7 @@ def _dart_aggregate_codegen_impl(ctx):
 
     direct_inputs = list(ctx.files.srcs) + extra_inputs
     transitive = [transitive_srcs] if transitive_srcs != None else []
-    transitive.append(dart_sdk_info.tool_files)
+    transitive.append(dart_sdk_info.analyze_files)
 
     if ctx.executable.generator_bin:
         ctx.actions.run(
@@ -138,12 +138,15 @@ def _dart_aggregate_codegen_impl(ctx):
             },
         )
     else:
+        # A `generator_script` is run by the `dart` launcher, which also loads
+        # `dartvm` and the kernel service: the runtime subset, on top of the
+        # analyze subset.
         ctx.actions.run(
             executable = dart_sdk_info.dart,
             arguments = [ctx.file.generator_script.path, args],
             inputs = depset(
                 direct = [ctx.file.generator_script] + direct_inputs,
-                transitive = transitive,
+                transitive = transitive + [dart_sdk_info.runtime_files],
             ),
             outputs = outputs,
             mnemonic = "DartAggregateCodegen",

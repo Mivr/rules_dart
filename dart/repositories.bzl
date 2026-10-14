@@ -116,12 +116,48 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The SDK files `dart analyze`, `dart fix` and the analyzer-summary tool read:
+# the launcher and the analysis snapshots, the `lib/` sources the analyzer
+# parses, the metadata it reads from `lib/_internal`, and `version`. That is
+# about 470 `.dart` files of `lib/` and the two snapshots, against the whole
+# SDK's 1,049 files and 642 MB: the dart2js, dartdevc and dart2wasm snapshots
+# are never opened. The patterns are generous so older layouts and macOS and
+# Windows names match, and `allow_empty` lets a pattern that names nothing on
+# this SDK pass.
+filegroup(
+    name = "analyze_files",
+    srcs = glob(
+        [
+            "bin/dart",
+            "bin/dart.exe",
+            "bin/dart.sym",
+            "bin/dartaotruntime",
+            "bin/dartaotruntime.exe",
+            "bin/dartaotruntime.sym",
+            "bin/*.dll",
+            "bin/snapshots/analysis_server*",
+            "bin/snapshots/dartdev.*",
+            "bin/snapshots/dartdev_*",
+            "lib/**/*.dart",
+            "lib/_internal/*.json",
+            "lib/_internal/*.yaml",
+            "lib/_internal/sdk_library_metadata/**",
+            "lib/libraries.json",
+            "version",
+            "revision",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
 dart_toolchain(
     name = "dart_toolchain",
     dart = "{dart_bin}",
     sdk_root = ":sdk_root",
     compile_files = ":compile_files",
     runtime_files = ":runtime_files",
+    analyze_files = ":analyze_files",
     version = "{version}",
 )
 """.format(
@@ -142,6 +178,7 @@ dart_toolchain(
     sdk_root = ":sdk_root",
     compile_files = ":compile_files",
     runtime_files = ":runtime_files",
+    analyze_files = ":analyze_files",
     version = "{version}",
     target_os = "{target_os}",
     target_arch = "{target_arch}",

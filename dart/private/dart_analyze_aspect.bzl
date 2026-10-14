@@ -466,11 +466,13 @@ def _dart_analyze_aspect_impl(target, ctx):
     )
 
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
-    sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.tool_files])
+
+    # The analyzer and `dart fix` read the SDK's launcher, its analysis snapshots
+    # and its `lib/` sources, which is the analyze subset, not the whole SDK.
+    sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.analyze_files])
 
     # The formatter reads no more of the SDK than the compiler does, so it takes
-    # the compile subset: far fewer action inputs. The analyzer reads the SDK's
-    # `lib/` sources, so `_analyze` and the fix action keep all of `tool_files`.
+    # the compile subset.
     format_sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.compile_files])
 
     tags = getattr(ctx.rule.attr, "tags", [])

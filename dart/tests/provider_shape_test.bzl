@@ -19,6 +19,9 @@ def _provider_shape_probe_impl(ctx):
     runtime_files = toolchain.dart_sdk_info.runtime_files
     if type(runtime_files) != "depset":
         fail("DartSdkInfo.runtime_files must be a depset, got %s" % type(runtime_files))
+    analyze_files = toolchain.dart_sdk_info.analyze_files
+    if type(analyze_files) != "depset":
+        fail("DartSdkInfo.analyze_files must be a depset, got %s" % type(analyze_files))
 
     srcs = collect_transitive_srcs(ctx.attr.deps)
     if type(srcs) != "depset":

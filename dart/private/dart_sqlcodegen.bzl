@@ -38,7 +38,7 @@ load(
 def _dart_sqlcodegen_impl(ctx):
     identity = resolve_package_identity(ctx)
     toolchain = ctx.toolchains["//dart:exec_tools_toolchain_type"]
-    sdk_files = toolchain.dart_sdk_info.tool_files
+    sdk_files = toolchain.dart_sdk_info.analyze_files
 
     if not ctx.attr.output_suffixes:
         fail("%s: `output_suffixes` must contain at least one suffix." %

@@ -99,6 +99,17 @@ normal for any rule-set bump, but it bit this repository once.
 - Workers: `DartKernel` actions run in a persistent worker by default (peak
   ~400 MB RSS each).
 
+### `DartSdkInfo.analyze_files` (analysis, fix and codegen)
+
+The SDK files `dart analyze`, `dart fix` and the analyzer-summary tool open:
+the launcher, the analysis snapshots, the `lib/` sources and the
+`lib/_internal` metadata. The analyze and fix actions, the summary actions, and
+`dart_codegen`, `dart_aggregate_codegen` and `dart_sqlcodegen` take it instead
+of the whole SDK. `dart_toolchain` takes an optional `analyze_files` label.
+When it is unset the field is `tool_files`, so a toolchain declared by another
+rule set keeps its old behaviour and gets the speedup only once it declares the
+filegroup, mirroring the generated one in `dart/repositories.bzl`. A generator
+given as a `.dart` script also takes `runtime_files`, because the `dart`
+launcher runs it through `dartvm` and the kernel service.
+
 ## Coming (not on `main` yet; see `in-flight.md`)
-
-

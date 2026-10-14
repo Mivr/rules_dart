@@ -9,6 +9,7 @@ DartSdkInfo = provider(
         "tool_files": "depset[File]: All files needed to run the SDK. Pass as a `transitive` entry to action inputs / `ctx.runfiles(transitive_files = ...)`; flatten only to inspect paths.",
         "compile_files": "depset[File]: The SDK files `dart compile`, `gen_kernel` and `dart format` read. A subset of `tool_files`; equal to it when the toolchain names none.",
         "runtime_files": "depset[File]: The SDK files a test needs at run time to run a compiled kernel. A subset of `tool_files`; equal to it when the toolchain names none.",
+        "analyze_files": "depset[File]: The SDK files `dart analyze`, `dart fix` and the analyzer-summary tool read: the launcher, the analysis snapshots and the SDK's `lib/` sources. A subset of `tool_files`; equal to it when the toolchain names none.",
         "target_os": "str: Cross-compilation target OS (`macos`, `linux`, `windows`), or empty for native.",
         "target_arch": "str: Cross-compilation target architecture (`x64`, `arm64`), or empty for native.",
     },
@@ -29,6 +30,10 @@ def _dart_toolchain_impl(ctx):
         runtime_files = ctx.attr.runtime_files.files
     else:
         runtime_files = tool_files
+    if ctx.attr.analyze_files != None:
+        analyze_files = ctx.attr.analyze_files.files
+    else:
+        analyze_files = tool_files
 
     dart_sdk_info = DartSdkInfo(
         dart = ctx.file.dart,
@@ -37,6 +42,7 @@ def _dart_toolchain_impl(ctx):
         tool_files = tool_files,
         compile_files = compile_files,
         runtime_files = runtime_files,
+        analyze_files = analyze_files,
         target_os = ctx.attr.target_os,
         target_arch = ctx.attr.target_arch,
     )
@@ -77,6 +83,9 @@ dart_toolchain = rule(
         ),
         "runtime_files": attr.label(
             doc = "A filegroup of the SDK files a test needs at run time to run a compiled kernel; a subset of `sdk_root`. Leave unset to use all of `sdk_root` for test runfiles too.",
+        ),
+        "analyze_files": attr.label(
+            doc = "A filegroup of the SDK files `dart analyze`, `dart fix` and the analyzer-summary tool read; a subset of `sdk_root`. Leave unset to use all of `sdk_root` for those actions too.",
         ),
         "version": attr.string(
             doc = "The SDK version string (e.g. `3.11.0`).",
