@@ -40,14 +40,6 @@ build on `main`, not on this.
 
 Landed on `main` as `398116c`; see `plan.md`.
 
-## Reproducible outputs (plan #9)
+## Reproducible outputs
 
-- `dart_compile_action` and `gen_kernel_native_assets_action` move to
-  `gen_kernel` with the `org-dartlang-bazel` multi-root file system.
-  - `exe`/`aot-snapshot`: an AOT kernel with stable URIs, then
-    `dart compile exe <dill>`.
-- `runner_snapshot.dart`: train with `--deterministic --target_unknown_cpu`, in
-  a fixed-length `/tmp` scratch dir, with an explicit minimal environment. On
-  Windows: no snapshot, unless a fixed-length root can be guaranteed.
-- Acceptance: two clean builds produce byte-identical `.dill`/`.jit`/`.aot`/exe
-  outputs, and no `linux-sandbox`, `/root/.cache` or `execroot` strings in them.
+Landed on `main` as `d2120e8`; see `plan.md` and `for-rules-flutter.md`.

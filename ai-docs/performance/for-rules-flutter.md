@@ -50,6 +50,12 @@ from runfiles.
 `package_for(short_path, packages)` still works: it builds the index per call.
 Callers in loops should build the index once.
 
+### `//dart:analyzer_summaries`, opt-in (`398116c`)
+
+A `dart_analyzer_summary` aspect along `deps`/`library`. A rule set's library
+targets get summaries when they provide `DartInfo` and list their `.dart` files
+in `DefaultInfo`.
+
 ### Lockfiles
 
 Any change to a `.bzl` file loaded by rules_dart's `pub` extension
@@ -59,18 +65,29 @@ A downstream root module that commits its `MODULE.bazel.lock` and builds with
 `--lockfile_mode=error` must refresh its lock when it bumps rules_dart. That's
 normal for any rule-set bump, but it bit this repository once.
 
+### Compiles go through `gen_kernel` with stable URIs (`d2120e8`)
+
+- `dart_compile_action(ctx, dart_sdk_info, ...)` replaces the old
+  `(dart_bin, sdk_files)` parameters. A rule set calling it must pass the
+  toolchain's `DartSdkInfo`.
+- Kernels and AOT snapshots name sources `org-dartlang-bazel:///<path>`, and
+  pub/package libraries `package:`, no longer absolute `file:` URIs. This
+  affects stack traces, and any tooling mapping kernel URIs to files
+  (debuggers, coverage, hot reload's `generate_dev_package_config`, which uses
+  `org-dartlang-app`). Check the two coexist.
+- `common.bzl` helpers: `STABLE_SCHEME`, `stable_path`, `stable_entry_path`,
+  `generate_stable_package_config` and `gen_kernel_args`.
+- `dart_compile_flags` are split by stage (`split_compile_flags`):
+  `--enable-experiment`, `-D`/`--define` and `--enable-asserts` go to the front
+  end. In `jit-snapshot` mode no other flag is accepted.
+- App-JIT snapshots are trained by `dart/private/tools/app_jit_snapshot.dart`
+  from a copy of `dart` and `dartvm` at `/tmp/rules_dart_vm-<sdk version>/bin`.
+  The training binary's absolute path changes the snapshot bytes.
+
 ## Coming (not on `main` yet; see `in-flight.md`)
 
 - **`DartKernelInfo`** on every `dart_library`. A rule set that builds its own
   `DartInfo`-providing library rule (e.g. a Flutter library rule) without
   `DartKernelInfo` makes every `dart_test` reaching it fall back to
   whole-program compilation. That's correct, just slower. Provide it to opt in.
-- **Stable source URIs.** Kernels and AOT snapshots will name sources
-  `org-dartlang-bazel:///<exec-root-relative path>` instead of absolute sandbox
-  `file:` URIs. This affects stack traces, and any tooling that maps kernel URIs
-  back to files (debuggers, coverage, hot reload via `generate_dev_package_config`).
-  Flutter's hot-reload path uses its own scheme (`org-dartlang-app`), so check
-  that the two coexist.
-- **`//dart:analyzer_summaries`** (opt-in): a `dart_analyzer_summary` aspect
-  along `deps`/`library`. A rule set's library targets get summaries when they
-  provide `DartInfo` and list their `.dart` files in `DefaultInfo`.
+
