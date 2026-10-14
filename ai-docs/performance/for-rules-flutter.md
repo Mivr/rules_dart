@@ -130,13 +130,18 @@ Under `//dart:analyzer_summaries`, `dart_codegen` passes `--summary <path>`
 that does not use `dart/ext/lib/builder_shim.dart` must accept (or ignore)
 them. With the flag off nothing changes.
 
-### Known regressions on `main` (being fixed)
+### Modular regressions fixed (`8e2e855`)
 
-With `//dart:modular_kernel` on: a `dart_library` that does not compile on its
-own (an undeclared package import, or a `part` supplied by another target)
-fails the build when an executable reaches it; and a `dart_test` whose library
-dependency defines a top-level `main` can start at that `main`. Workaround until the fix lands:
-`--@rules_dart//dart:modular_kernel=false`. See `in-flight.md`.
+- A `dart_library` whose sources cannot compile alone (an undeclared package
+  import, a `part` supplied by another target) no longer fails the build: the
+  module planner leaves those files out, and the entry compiles them from
+  source. A file a dependency module already defines is not compiled again.
+- Two libraries that do not depend on each other and list the same source make
+  the executable fall back to whole-program compilation; `kernel_link` fails on
+  a library defined twice instead of keeping the first.
+- The link writes the entry kernel first: the VM runs the `main` of the first
+  component that has one, so a dependency library's `main` no longer starts a
+  test.
 
 ## Answers to rules_flutter's asks (`asks-for-rules-dart.md`, 2026-10-14)
 
@@ -203,10 +208,8 @@ reproducible. Tell us which you prefer.
 
 ### D. A version to depend on: user
 
-Releases are the user's call. For testing now, pin `main` at `ca41cd4` with
-`--@rules_dart//dart:modular_kernel=false` (two known modular regressions,
-plan #14). Once the plan #14 fix lands, its commit is the one to pin without
-the flag; it will be named here.
+Releases are the user's call. For testing now, pin `main` at `8e2e855` or later (the
+plan #14 fix); no flag is needed.
 
 ### E. A macro declaring an SDK toolchain over a directory: accepted (plan #18)
 
