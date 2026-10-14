@@ -21,6 +21,7 @@ and CPU totals are the steadier signal. Raw numbers are in `results/`.
 | 7 | `398116c` | Opt-in `//dart:analyzer_summaries`: analysis against per-library summaries; SDK linter vendored  | Leaf body edit: 61 analyses → 1 (44 s → 17 s); flag off unchanged     |
 | 10 | `8a1e20d` | `DartSdkInfo.analyze_files`: analyze, fix, summary and codegen actions get the analyze subset of the SDK | `DartAnalyze` inputs on `//:bad_lib`: 1,082 → 515 (SDK 1,049 → 482) |
 | 13 | `09c5905` | Whole-program `dart_binary` / `dart_test` compile split packages in place (multi-root) instead of copying them into `.pkgsrcs` trees | `e2e/codegen`, modular off: copy actions 8 → 1 (the `dart_source_set`) |
+| 12 | `4090db6`, `dfb6274` | Summary mode: a `srcs_dir` library no longer claims a package it has no summary for, generated libraries are summarized (own sources staged under their own root); `dart_codegen` resolves other packages from summaries under the flag | Codegen request (warm): mockito 0.64 → 0.35 s, built_value 0.35 → 0.27 s; output byte-identical |
 
 Overall, against the original `main` (`3b0470c`):
 
@@ -41,15 +42,14 @@ come from separate A/B runs.
 
 | #  | Item                                                                                       | State                                                                                                                                                                                                  |
 | -- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 14 | **Regression fix**: modular compile of a `dart_library` that does not compile on its own (found in `e2e/ext_exemplar`) | Agent fixing in the module planner; see `in-flight.md` |
+| 14 | **Regression fixes** for modular compiles: a `dart_library` that does not compile on its own (`e2e/ext_exemplar`); a dependency library's `main` starting the linked test | Agent fixing; see `in-flight.md` |
+| 15 | Drop `yaml.bzl` (its `bazel_lib` dep is what keeps `bazel_lib` in users' graphs): in-repo Starlark pubspec parser | Agent implementing, stacked on #11 |
 | 11 | Drop `bazel_lib`: a Dart copy tool behind `//dart:copy_toolchain_type` | Agent implementing |
-| 12 | Codegen on analyzer summaries | Works; 96 generated files byte-identical; 15–45% faster per request. Found a bug in landed summary mode (`srcs_dir` libraries), being fixed first |
 
 ## Queued (agreed with the user, 2026-10-14)
 
 | #  | Item                                                                                                                                                       | Depends on |
 | -- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| 12 | `dart_codegen` resolves against analyzer summaries instead of a fresh analyzer over the whole closure                                                      | #8         |
 
 ## Dropped
 

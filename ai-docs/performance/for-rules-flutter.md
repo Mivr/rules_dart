@@ -122,11 +122,20 @@ in `dart/utils.bzl` are unchanged; no rule in rules_dart calls them any more.
 `dart_binary`, `dart_test` and `dart_test_kernel` no longer declare the copy
 toolchain.
 
-### Known regression on `main` (being fixed)
+### Summary-mode and codegen changes (`4090db6`, `dfb6274`)
 
-With `//dart:modular_kernel` on, a `dart_library` that does not compile on its
+`DartAnalyzerSummaryInfo` gained `packaged_summaries` (`depset[(package, File)]`).
+Under `//dart:analyzer_summaries`, `dart_codegen` passes `--summary <path>`
+(repeatable) and `--sdk-summary <path>` to every `generator_bin`; a generator
+that does not use `dart/ext/lib/builder_shim.dart` must accept (or ignore)
+them. With the flag off nothing changes.
+
+### Known regressions on `main` (being fixed)
+
+With `//dart:modular_kernel` on: a `dart_library` that does not compile on its
 own (an undeclared package import, or a `part` supplied by another target)
-fails the build when an executable reaches it. Workaround until the fix lands:
+fails the build when an executable reaches it; and a `dart_test` whose library
+dependency defines a top-level `main` can start at that `main`. Workaround until the fix lands:
 `--@rules_dart//dart:modular_kernel=false`. See `in-flight.md`.
 
 ## Coming (not on `main` yet; see `in-flight.md`)

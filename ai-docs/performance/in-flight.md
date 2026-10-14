@@ -23,18 +23,8 @@ Landed on `main` as `8a1e20d`; see `plan.md` and `for-rules-flutter.md`.
 
 ## Codegen on analyzer summaries (plan #12)
 
-- `dart_codegen` resolves against the dependencies' analyzer summaries when
-  `//dart:analyzer_summaries` is on, instead of analyzing the closure from
-  source. The 96 generated files of `e2e/codegen` are byte-identical either
-  way, and each request is 15–45% faster.
-- Bug found in the landed summary mode: a library given as `srcs_dir` lists the
-  directory, not `.dart` files, in `DefaultInfo`. It produces no summary yet
-  still claims its package, so a dependent neither reads the package from
-  source nor finds a summary for it. The fix (a target claims its package only
-  when it built a summary or has no `lib/` sources) lands first, as its own
-  `fix(analyze)` commit with a regression test.
-- Still to prove: the generator worker's memory stays flat over 300 requests,
-  or it is recycled.
+Landed on `main` as `4090db6` (summary-mode fixes) and `dfb6274` (codegen).
+Summaries and generated files are byte-identical across install paths.
 
 ## Multi-root whole-program compile (plan #13)
 
@@ -63,10 +53,23 @@ Why it got through: the reviewing harness's e2e suite skipped `ext_exemplar`,
 whose Gazelle targets need go.dev (blocked in this sandbox). It now builds a
 copy with the Gazelle targets stripped (see `harness/README.md`).
 
+## Regression: a dependency's `main` starts the test (plan #14)
+
+Also from `959b7b3`: `//dart/ext/tools:check_dual_build_collisions_test` times
+out with modular on. Its library dependency defines a top-level `main`, and the
+linked kernel starts there instead of at the test's entry. Passes with
+`--@rules_dart//dart:modular_kernel=false` and before `959b7b3`. Missed because
+verification ran `//dart/tests/...`, `//dart/private/tools/...` and
+`//dart/runfiles/...` but not `//dart/ext/...`; it now runs `//dart/ext/...`
+with `--keep_going` (the sqlite targets cannot fetch in this sandbox).
+
 ## Drop `bazel_lib` (plan #11)
 
 The only use is `assemble_source_dir` (`copy_to_directory`). Being replaced by
 a `dart:io`-only copy tool behind a new `//dart:copy_toolchain_type`, so the
 public `COPY_TO_DIRECTORY_TOOLCHAINS` / `colocate_*` helpers keep working for
 downstream rule sets unchanged. Acceptance: copied trees byte-identical to
-`copy_to_directory`'s.
+`copy_to_directory`'s (shown on e2e/codegen, analysis staging, a tree-artifact
+fixture and an external-repo probe). Cost: about +30 ms per copy action (Dart
+exe startup vs Go). `bazel_lib` stays in users' graphs through `yaml.bzl`
+(plan #15), so the two land together with one lock refresh.
