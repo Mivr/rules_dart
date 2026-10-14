@@ -2,7 +2,7 @@
 
 load("//dart:providers.bzl", "CODE_ASSET_LINK_MODES", "DartInfo", "DartPackageMetadataInfo")
 load("//dart/private:dart_info.bzl", "derived_package_info", "package_lib_prefix")
-load("//dart/private:source_set.bzl", "needs_source_assembly", "package_for")
+load("//dart/private:source_set.bzl", "needs_source_assembly", "package_for_index", "package_index")
 
 # Official Bazel bash runfiles v3 initialization boilerplate.
 # Sources runfiles.bash which provides rlocation() for cross-platform
@@ -644,8 +644,9 @@ def resolve_package_roots(packages, all_srcs):
 
     by_name = {pkg.package_name: pkg for pkg in packages}
     roots = {}
+    index = package_index(packages)
     for src in all_srcs:
-        name = package_for(src.short_path, packages)
+        name = package_for_index(src.short_path, index)
         if name == None or name in roots:
             continue
 
@@ -783,8 +784,9 @@ def generate_dev_package_config(packages, all_srcs, config_file, scheme = "org-d
         )
 
     by_pkg = {}
+    index = package_index(packages)
     for f in all_srcs:
-        name = package_for(f.short_path, packages)
+        name = package_for_index(f.short_path, index)
         if name == None:
             continue
         by_pkg.setdefault(name, []).append(f)

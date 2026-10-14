@@ -16,7 +16,7 @@ same assembly as a standalone, package-agnostic primitive (consumed via
 """
 
 load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory_bin_action")
-load("//dart/private:dart_info.bzl", "derived_package_info", "package_lib_prefix")
+load("//dart/private:dart_info.bzl", "derived_package_info")
 
 COPY_TO_DIRECTORY_TOOLCHAINS = ["@bazel_lib//lib:copy_to_directory_toolchain_type"]
 
@@ -90,6 +90,10 @@ def package_for(short_path, packages):
     rewrote to its `.pkgsrcs` directory — where the directory *is* the package
     root and `lib/` sits inside it.
 
+    Callers matching many files against one package list build the index once
+    with `package_index` and call `package_for_index` instead: this wrapper
+    rebuilds it on every call.
+
     Args:
       short_path: A File's `short_path`.
       packages: List of `DartPackageInfo` (read for `package_name` and `lib_root`).
@@ -97,25 +101,56 @@ def package_for(short_path, packages):
     Returns:
       The matching `package_name`, or `None` if no package owns the path.
     """
-    best_name = None
-    best_len = -1
-    for p in packages:
-        lr = p.lib_root
-        prefix = package_lib_prefix(lr)
+    return package_for_index(short_path, package_index(packages))
 
-        # `<lib_root>/lib` — the library directory itself, not a file under it.
-        lib_dir = prefix[:-1]
-        under_lib = short_path == lib_dir or short_path.startswith(prefix)
-        if not lr:
-            # Root package: owns `lib/...` files. Lowest precedence.
-            if under_lib and best_len < 0:
-                best_name = p.package_name
-                best_len = 0
-        elif under_lib or short_path == lr:
-            if len(lr) > best_len:
-                best_name = p.package_name
-                best_len = len(lr)
-    return best_name
+def package_index(packages):
+    """Indexes packages by `lib_root`, for `package_for_index`.
+
+    Where several records share a `lib_root`, the first keeps it, as
+    `package_for`'s scan in list order always decided.
+
+    Args:
+      packages: List of `DartPackageInfo` (read for `package_name` and `lib_root`).
+
+    Returns:
+      Dict of `lib_root` to `package_name`.
+    """
+    index = {}
+    for p in packages:
+        if p.lib_root not in index:
+            index[p.lib_root] = p.package_name
+    return index
+
+def package_for_index(short_path, index):
+    """`package_for` against an index from `package_index`.
+
+    The only `lib_root`s that can own a path are the path itself (an opaque
+    package directory) and each prefix that ends just before a `lib` component
+    of it. Trying those longest first, and taking the first that names a
+    package, is `package_for`'s longest-match rule in time proportional to the
+    path's depth rather than to the number of packages: an executable matches
+    every file of its closure, so the scan cost files × packages per target.
+
+    Args:
+      short_path: A File's `short_path`.
+      index: Dict of `lib_root` to `package_name`, from `package_index`.
+
+    Returns:
+      The matching `package_name`, or `None` if no package owns the path.
+    """
+
+    # The path itself is longer than any prefix of it. The root package's
+    # empty `lib_root` owns only its `lib/`, never a path by equality.
+    name = index.get(short_path) if short_path else None
+    if name != None:
+        return name
+    parts = short_path.split("/")
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == "lib":
+            name = index.get("/".join(parts[:i]))
+            if name != None:
+                return name
+    return None
 
 def colocate_packages(ctx, packages, all_srcs, members = {}):
     """Co-locates each package's split source/generated files into one directory.
@@ -145,8 +180,9 @@ def colocate_packages(ctx, packages, all_srcs, members = {}):
     """
     by_pkg = {}
     loose = []
+    index = package_index(packages)
     for f in all_srcs:
-        name = package_for(f.short_path, packages)
+        name = package_for_index(f.short_path, index)
         if name == None:
             loose.append(f)
         elif name in by_pkg:

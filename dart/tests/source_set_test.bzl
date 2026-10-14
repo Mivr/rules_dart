@@ -98,6 +98,29 @@ def _package_for_external_and_nomatch_test_impl(ctx):
     asserts.equals(env, None, package_for("other/lib/x.dart", pkgs))
     return unittest.end(env)
 
+def _package_for_lib_inside_lib_root_test_impl(ctx):
+    # A `lib` component inside a `lib_root` is part of the root, not the
+    # package's `lib/`: the package rooted deepest still wins, and the outer
+    # one owns only what sits in its own `lib/` outside the inner root.
+    env = unittest.begin(ctx)
+    pkgs = [_fake_pkg("outer", "a"), _fake_pkg("inner", "a/lib/b")]
+    asserts.equals(env, "inner", package_for("a/lib/b/lib/x.dart", pkgs))
+    asserts.equals(env, "outer", package_for("a/lib/b/x.dart", pkgs))
+    asserts.equals(env, "outer", package_for("a/lib/x.dart", pkgs))
+    return unittest.end(env)
+
+def _package_for_shared_root_first_wins_test_impl(ctx):
+    # Two records at one `lib_root` (a split package; two hubs): the first in
+    # list order owns the path, as it did when the lookup scanned the list.
+    env = unittest.begin(ctx)
+    pkgs = [_fake_pkg("first", "p"), _fake_pkg("second", "p"), _fake_pkg("root", "")]
+    asserts.equals(env, "first", package_for("p/lib/x.dart", pkgs))
+    asserts.equals(env, "first", package_for("p", pkgs))
+
+    # The root package's `lib/` holding a directory that is named like one.
+    asserts.equals(env, "root", package_for("lib/p/lib/x.dart", pkgs))
+    return unittest.end(env)
+
 def _colocate_loose_passthrough_test_impl(ctx):
     # A transitive source whose package is not in `packages` (e.g. a pub
     # transitive dep that rides along in transitive_srcs) is already co-located
@@ -228,6 +251,8 @@ _root_pkg_test = unittest.make(_package_for_root_package_test_impl)
 _longest_prefix_test = unittest.make(_package_for_longest_prefix_test_impl)
 _exact_dir_test = unittest.make(_package_for_exact_dir_test_impl)
 _non_root_lib_only_test = unittest.make(_package_for_non_root_only_claims_lib_test_impl)
+_lib_inside_root_test = unittest.make(_package_for_lib_inside_lib_root_test_impl)
+_shared_root_test = unittest.make(_package_for_shared_root_first_wins_test_impl)
 _external_nomatch_test = unittest.make(_package_for_external_and_nomatch_test_impl)
 _colocate_loose_test = unittest.make(_colocate_loose_passthrough_test_impl)
 
@@ -245,6 +270,8 @@ def source_set_test_suite(name):
     _exact_dir_test(name = "source_set_package_for_exact_dir_test", size = "small")
     _non_root_lib_only_test(name = "source_set_package_for_non_root_lib_only_test", size = "small")
     _external_nomatch_test(name = "source_set_package_for_external_test", size = "small")
+    _lib_inside_root_test(name = "source_set_package_for_lib_inside_root_test", size = "small")
+    _shared_root_test(name = "source_set_package_for_shared_root_test", size = "small")
     _colocate_loose_test(name = "source_set_colocate_loose_test", size = "small")
     _derive_carries_test(name = "source_set_derive_carries_test", size = "small")
     _derive_defaults_test(name = "source_set_derive_defaults_test", size = "small")
@@ -260,6 +287,8 @@ def source_set_test_suite(name):
             ":source_set_package_for_exact_dir_test",
             ":source_set_package_for_non_root_lib_only_test",
             ":source_set_package_for_external_test",
+            ":source_set_package_for_lib_inside_root_test",
+            ":source_set_package_for_shared_root_test",
             ":source_set_colocate_loose_test",
             ":source_set_derive_carries_test",
             ":source_set_derive_defaults_test",

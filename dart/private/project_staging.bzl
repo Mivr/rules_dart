@@ -34,7 +34,7 @@ on Dart 3.12.2), so options still come from the nearest `analysis_options.yaml`
 above each file, never from a pubspec's position.
 """
 
-load("//dart/private:source_set.bzl", "assemble_source_dir", "package_for")
+load("//dart/private:source_set.bzl", "assemble_source_dir", "package_for_index", "package_index")
 
 def mangle_package_dir(name):
     """Returns `name` with path-hostile characters replaced for use as a dir name.
@@ -247,11 +247,12 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
     ext_pkgs = [p for p in packages if p.lib_root.startswith("../")]
     main_files = []
     ext_files_by_pkg = {}
+    ext_index = package_index(ext_pkgs)
     for f in all_srcs:
         if f.short_path.startswith("../"):
             # External files matching no package have no package: URI to
             # serve; nothing can resolve them from the staged project.
-            owner = package_for(f.short_path, ext_pkgs)
+            owner = package_for_index(f.short_path, ext_index)
             if owner != None:
                 ext_files_by_pkg.setdefault(owner, []).append(f)
         else:
