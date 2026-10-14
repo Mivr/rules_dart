@@ -50,6 +50,10 @@ come from separate A/B runs.
 
 | #  | Item                                                                                                                                                       | Depends on |
 | -- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 16 | Export modular compilation for rules_flutter: helper with `target`, platform dill, available-libraries list, `scheme`, extra inputs; `kernel_module` / `kernel_link` public (ask A) | #14 |
+| 17 | SDK summary takes an embedder (`_embedder.yaml`, for `dart:ui`); summary mode turns itself off on an SDK newer than its analyzer (asks B, F) | — |
+| 18 | Macro declaring the SDK filegroups and `dart_toolchain` over a path prefix; test that a root-registered toolchain wins without fetching the default SDK (ask E) | — |
+| 19 | `pub.from_lock()` fails on a hosted package without `sha256` (and a git package without `resolved-ref`), shared error text with rules_flutter (ask I) | — |
 
 ## Dropped
 
