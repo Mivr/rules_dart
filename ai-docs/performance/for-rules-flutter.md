@@ -84,10 +84,21 @@ normal for any rule-set bump, but it bit this repository once.
   from a copy of `dart` and `dartvm` at `/tmp/rules_dart_vm-<sdk version>/bin`.
   The training binary's absolute path changes the snapshot bytes.
 
+### Modular `dart_test` compiles (`959b7b3`)
+
+- Every `dart_library` provides **`DartKernelInfo`** (`kmod` tree artifact,
+  `transitive_kmods`, `modular`, `closure_excluded`; see
+  `dart/private/dart_kernel.bzl`). A rule set with its own
+  `DartInfo`-providing library rule (e.g. a Flutter library rule) that doesn't
+  provide `DartKernelInfo` makes every `dart_test` reaching it fall back to
+  whole-program compilation. That's correct, just slower. Provide it, built
+  with `library_kernel_info`, to opt in.
+- `dart_library` now has an optional exec tools toolchain and the private
+  attrs `_kernel_module` / `_modular_kernel`.
+- `//dart:modular_kernel` (default on) switches it off.
+- Workers: `DartKernel` actions run in a persistent worker by default (peak
+  ~400 MB RSS each).
+
 ## Coming (not on `main` yet; see `in-flight.md`)
 
-- **`DartKernelInfo`** on every `dart_library`. A rule set that builds its own
-  `DartInfo`-providing library rule (e.g. a Flutter library rule) without
-  `DartKernelInfo` makes every `dart_test` reaching it fall back to
-  whole-program compilation. That's correct, just slower. Provide it to opt in.
 

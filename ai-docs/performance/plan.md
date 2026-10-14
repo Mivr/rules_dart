@@ -17,6 +17,7 @@ and CPU totals are the steadier signal. Raw numbers are in `results/`.
 | 5 | `95089ce` | Staged projects reference pub packages in place instead of copying them per target               | Clean lint: 1,692 → 282 sandboxed actions, 1,532 → 122 copies         |
 | 6 | `4445fa1` | `MODULE.bazel.lock` refresh: fixes the regression #4 introduced (see `decisions.md`)            | `--lockfile_mode=error` builds pass again                             |
 | 8 | `d2120e8` | Reproducible outputs: `gen_kernel` with `org-dartlang-bazel:///` URIs; deterministic, fixed-path snapshot training; `dart_compile_flags` routed by stage | Every compiled output byte-identical across clean builds and install paths; build time unchanged; per test 0.55 → 0.28 s |
+| 9 | `959b7b3` | Modular `dart_test` compiles: per-SCC kernels per `dart_library`, warm `kernel_worker`, reachability-pruned link (`//dart:modular_kernel`) | Clean 22.1 → 19.9 s; leaf body edit 16.5 → 9.3 s; API edit 21.0 → 11.3 s; test kernel 13.0 → 4.2 MB |
 | 7 | `398116c` | Opt-in `//dart:analyzer_summaries`: analysis against per-library summaries; SDK linter vendored  | Leaf body edit: 61 analyses → 1 (44 s → 17 s); flag off unchanged     |
 
 Overall, against the original `main` (`3b0470c`):
@@ -38,7 +39,6 @@ come from separate A/B runs.
 
 | #  | Item                                                                                       | State                                                                                                                                                                                                  |
 | -- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 7  | Modular kernel compilation at library granularity (per-SCC kernels, pruned link, warm worker) | **Gates met on the bench**: clean 19.4 s vs 24.7 s, body edit 9.1 s vs 17.7 s, linked kernel 4.2 MB vs 13.1 MB. Lands after #9, then rebase and re-verify. |
 
 ## Queued (agreed with the user, 2026-10-14)
 
