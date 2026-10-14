@@ -1,0 +1,95 @@
+# Decisions log
+
+Newest last. "User" means the repository owner; "agent" means the reviewing
+agent, which decided within the scope the user set.
+
+## 2026-10-14
+
+**Scope (user).** A deep performance review using approaches from other rule
+sets and languages. Implementation by Haiku agents, one improvement at a time,
+each pushed to `main` once confirmed good.
+
+**Baseline first (user).** Measured on the original `main` (`3b0470c`) before
+anything changed. See `results/baseline_3b0470c.json` and
+`results/baseline_r2.json` (a repeat run that measured the noise).
+
+**Leave the Gazelle plugin in the core module (user).** It does not affect
+build performance enough to justify a breaking change for Gazelle users.
+
+**Trim the SDK from test runfiles (user, after asking why tests would run SDK
+commands).** No test in this repository runs `dart format`/`dart compile`.
+Tests that do must declare `@rules_dart//dart` in `data`, which brings the
+whole SDK. Runfiles keep `dart`, `dartvm`, the kernel-service snapshot and the
+platform dills, so `Isolate.spawnUri` on `.dart` sources keeps working.
+
+**SDK subsets fall back to the whole SDK (agent).** `compile_files` and
+`runtime_files` are optional on `dart_toolchain`. A toolchain that names
+neither, as rules_flutter's own may, gets `tool_files`, so other rule sets keep
+working unchanged.
+
+**Runner snapshot behind a flag (agent).** An app-JIT snapshot records the VM
+build, not CPU features, so `--@rules_dart//dart:test_runner_snapshot=false`
+exists for shared caches across very different CPUs. It is built only when the
+exec and target SDK are the same `dart` binary. Otherwise tests run the
+runner's kernel.
+
+**`dart_format` (`bazel run`) keeps copying pub packages (agent).** It reads
+its staged project from runfiles, where a relative path into `external/` does
+not hold. A package split between `external/<repo>` and `bazel-out` (a
+`bazel_dep` module's library with `dart_codegen` outputs) is also still copied:
+two roots must be merged.
+
+**Lockfile regression, and the extra check (agent).** The runner-snapshot
+commit changed `dart/pub/private/build_content.bzl`. That moved the `pub`
+extension's `bzlTransitiveDigest` and made every `MODULE.bazel.lock` stale, so
+`--lockfile_mode=error` builds of this repo and its e2e workspaces failed.
+Downstream users were not affected. It was missed because the sandbox ran with
+`--lockfile_mode=off` (bcr.bazel.build is unreachable there). Fixed in
+`4445fa1`: locks refreshed through a GitHub registry mirror, registry URLs
+mapped back, every hash verified unchanged. Every change touching extension
+`.bzl` files now gets a lockfile check before it lands.
+
+**Modular kernel compilation: full module kernels, not outlines (agent).**
+`kernel_worker --summary-only` is unsupported for the `vm` target: it prints
+an error, exits 0, and embeds the whole platform (3.7 MB per outline). Modules
+link against dependency module kernels with `--input-linked`, as
+`build_vm_compilers` does. Cost: no early cutoff below the edited library.
+
+**Modular compilation is for `dart_test` only (agent).** A `_kernel_link` tool
+attr on `dart_binary` pointing at a `dart_binary` would make a cycle. A
+kernel-mode `dart_binary` is rare, and the `package:test` runner is built once
+per version.
+
+**Web-only pub files: drop and retry, don't turn the feature off (agent).** Pub
+packages keep `dart:js_interop`/`package:web` files next to VM code behind
+conditional imports, so compiling every file of a library for the VM fails, and
+`package:test` reaches `package:web`. Defaulting modular off would make it
+useless. Instead, a wrapper drops the files that fail for the VM and retries,
+and the test's entry module compiles from source any dropped library it
+actually reaches. A real error still surfaces where the whole-program compile
+would report it. This also removes the strict-deps behaviour change.
+
+**Global `--extra_dart_defines` don't block modular mode (agent).** They are
+the same for the whole build, so modules are compiled with them too. Only a
+test's own `defines` fall back to whole-program.
+
+**Analyzer summaries: opt-in flag (user).** Diagnostics come from rules_dart's
+pinned `package:analyzer`, not the SDK's `dart analyze`, and the code relies on
+analyzer `src/` APIs. So `//dart:analyzer_summaries` defaults to off. It can
+become the default once proven.
+
+**Lint rules in summary mode (user asked; agent chose how).** `package:analyzer`
+on pub ships no lint rules, and the linter is unpublished. Vendor the SDK's
+`pkg/linter/lib` from tag `3.13.5` (the toolchain default), so the lint set is
+exactly what `dart analyze` runs for that SDK. Pin `analyzer` 14.1.0, the
+release matching that SDK's analyzer, in a dedicated pub hub for the summary
+tool only; the codegen shims stay on 13.3.0. When the default SDK moves, the
+linter must be re-vendored and the pin moved.
+
+**Next items (user).** Do the analyzer-only SDK file set, drop `bazel_lib`,
+codegen on summaries, and multi-root in the fallback compile.
+
+**Reproducibility is a hard requirement (user).** "We cannot have things that
+are not hermetic and reproducible in the builds." The runner snapshot must be
+reproducible. The audit that followed found every compiled output was
+non-reproducible already, so the fix covers all compile modes (`findings.md`).
