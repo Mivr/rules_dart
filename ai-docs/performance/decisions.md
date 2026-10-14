@@ -98,6 +98,19 @@ analyzer, and its rule set differs from SDK 3.13.5's by one rule,
 that published the module's pinned `package:analyzer`, and is re-vendored when
 that pin moves.
 
+**Modular kernels: plan modules from the import graph, not from compiler errors
+(agent).** The drop-and-retry wrapper worked end to end (263/263 unit tests,
+all e2e passing), but it could not attribute errors to the file that caused
+them, so emptied modules cascaded. `package:web` failing for the VM emptied
+`package:test`, and every test then compiled `package:test` from source. Entry
+modules compiled without `--exclude-non-sources` also embedded the SDK
+platform (38 MB each). Replaced with the `package:build_modules` approach:
+- a directive scanner reads each source's imports/exports/parts;
+- conditional imports are resolved for the VM (`lib/libraries.json`);
+- a file reaching a non-VM `dart:` library, or an excluded file, is excluded,
+  file by file, through a per-module sidecar list.
+Remaining compile errors are real errors.
+
 **Next items (user).** Do the analyzer-only SDK file set, drop `bazel_lib`,
 codegen on summaries, and multi-root in the fallback compile.
 
