@@ -58,6 +58,7 @@ reusing across requests is a silent-corruption hazard due to
 cost is amortised across the worker's lifetime.
 """
 
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//dart:providers.bzl", "DartInfo", "DartPackageMetadataInfo")
 load(
     "//dart/private:common.bzl",
@@ -70,6 +71,33 @@ load(
     "same_package_library_dep_files",
     "synth_package_config",
 )
+load(":dart_analyzer_summary.bzl", "DartAnalyzerSummaryInfo", "dart_analyzer_summary")
+
+def analyzer_summary_inputs(ctx, package_name):
+    """Returns the analyzer summaries a `generator_bin` shim resolves `deps` against.
+
+    Under `//dart:analyzer_summaries` the shim reads the libraries of `deps`
+    outside `package_name` from their summaries, not from source. Same-package
+    libraries stay sources, since they are the files the builder reads.
+
+    Args:
+      ctx: The `dart_codegen` rule context.
+      package_name: The package owning `src`.
+
+    Returns:
+      A pair `(summaries, sdk_summary)`: the `File`s to pass as `--summary`, and
+      the SDK summary to pass as `--sdk-summary`. Both are empty when the flag
+      is off, so the command line is unchanged.
+    """
+    if not ctx.attr._analyzer_summaries[BuildSettingInfo].value:
+        return [], None
+    packaged = depset(transitive = [
+        d[DartAnalyzerSummaryInfo].packaged_summaries
+        for d in ctx.attr.deps
+        if DartAnalyzerSummaryInfo in d
+    ]).to_list()
+    summaries = [f for (name, f) in packaged if name != package_name]
+    return summaries, ctx.file._analyzer_sdk_summary
 
 def compute_codegen_output_name(src_path, output_suffix):
     """Compute the output file path for a codegen source file.
@@ -166,6 +194,16 @@ def _dart_codegen_impl(ctx):
             lib_root = lib_root,
         ))
         args.add_all(ctx.attr.generator_args)
+
+        # Under `//dart:analyzer_summaries` only: the other packages of `deps`
+        # resolve from their summaries. The script branch below takes no
+        # summaries, since a script does not speak the shim contract.
+        summaries, sdk_summary = analyzer_summary_inputs(ctx, identity.package_name)
+        if sdk_summary != None:
+            args.add_all(summaries, before_each = "--summary")
+            args.add("--sdk-summary", sdk_summary)
+            direct_inputs.extend(summaries)
+            direct_inputs.append(sdk_summary)
 
         ctx.actions.run(
             executable = ctx.executable.generator_bin,
@@ -296,6 +334,17 @@ dart_codegen = rule(
                   "as `src` is also auto-staged as `--dep` so the " +
                   "Resolver can walk siblings.",
             providers = [DartInfo],
+            # Under `//dart:analyzer_summaries`, each dependency carries the
+            # summaries the shim reads in place of its source.
+            aspects = [dart_analyzer_summary],
+        ),
+        "_analyzer_summaries": attr.label(
+            default = "//dart:analyzer_summaries",
+            providers = [BuildSettingInfo],
+        ),
+        "_analyzer_sdk_summary": attr.label(
+            default = "//dart/private:analyzer_sdk_summary_input",
+            allow_single_file = True,
         ),
         "parts": attr.label_list(
             doc = "Additional input files passed as `--part <path>` " +

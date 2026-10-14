@@ -33,6 +33,7 @@ DartAnalyzerSummaryInfo = provider(
     fields = {
         "summary": "File or None: the summary of this target's own libraries. None when it has none, or the flag is off.",
         "transitive_summaries": "depset[File]: the summaries of this target and of every target it depends on.",
+        "packaged_summaries": "depset[(str, File)]: the same summaries as `transitive_summaries`, each paired with the name of the package it summarizes. A consumer drops the pairs of its own package, which it reads from source.",
         "packages": "depset[str]: the keys (see `package_key`) of this target's own package and of every package its dependencies carry. A package in a closure that is missing here has no summary, so its dependents are analyzed from source.",
     },
 )
@@ -155,7 +156,7 @@ def _dart_analyzer_summary_impl(target, ctx):
     ])
     info = target[DartInfo]
     if not ctx.attr._enabled[BuildSettingInfo].value:
-        return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = depset(), packages = depset())]
+        return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = depset(), packaged_summaries = depset(), packages = depset())]
 
     # A target's own package is covered only by a summary that covers it. A
     # target with sources of its own gets one below, or, for an opaque `srcs_dir`
@@ -169,8 +170,11 @@ def _dart_analyzer_summary_impl(target, ctx):
         own,
         transitive = [d[DartAnalyzerSummaryInfo].packages for d in deps if DartAnalyzerSummaryInfo in d],
     )
+    packaged = depset(
+        transitive = [d[DartAnalyzerSummaryInfo].packaged_summaries for d in deps if DartAnalyzerSummaryInfo in d],
+    )
     if not srcs:
-        return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = dependencies, packages = packages)]
+        return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = dependencies, packaged_summaries = packaged, packages = packages)]
 
     name = ctx.label.name + ".dart_analyzer_summary"
     summary = ctx.actions.declare_file(name + ".sum")
@@ -226,6 +230,7 @@ def _dart_analyzer_summary_impl(target, ctx):
     return [DartAnalyzerSummaryInfo(
         summary = summary,
         transitive_summaries = depset([summary], transitive = [dependencies]),
+        packaged_summaries = depset([(info.package_name, summary)], transitive = [packaged]),
         packages = packages,
     )]
 

@@ -797,6 +797,7 @@ void main() {
             ({
               required List<String> includedPaths,
               required String? sdkPath,
+              required List<String> librarySummaryPaths,
             }) async {
               // Checked here rather than after the run: the staging dir is deleted
               // as soon as `runShim` returns.

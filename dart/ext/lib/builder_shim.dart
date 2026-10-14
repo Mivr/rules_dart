@@ -22,6 +22,8 @@ import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/analysis/session.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
+// ignore: implementation_imports
+import 'package:analyzer/src/dart/analysis/analysis_context_collection.dart';
 import 'package:args/args.dart';
 import 'package:build/build.dart';
 import 'package:crypto/crypto.dart';
@@ -42,6 +44,8 @@ class ShimArgs {
     required this.rootLanguageVersion,
     this.packageConfigUri,
     this.sdkPath,
+    this.summaryPaths = const [],
+    this.sdkSummaryPath,
   });
 
   final String inputPath;
@@ -67,6 +71,14 @@ class ShimArgs {
 
   /// Dart SDK root — AOT shims can't auto-detect this.
   final String? sdkPath;
+
+  /// Analyzer summaries of the libraries outside the input's own package
+  /// (`--summary`, repeatable). Empty leaves the analysis context as it was.
+  final List<String> summaryPaths;
+
+  /// The analyzer summary of the SDK's own libraries (`--sdk-summary`), read
+  /// alongside [summaryPaths]. Null when not given.
+  final String? sdkSummaryPath;
 
   final LanguageVersion rootLanguageVersion;
 
@@ -141,6 +153,20 @@ class ShimArgs {
             "context collection can locate the SDK's libraries. The "
             "rules_dart codegen rules pass this from the toolchain.",
         defaultsTo: '',
+      )
+      ..addMultiOption(
+        'summary',
+        help:
+            'Analyzer summary (`.sum`) of a library outside the input\'s '
+            'package. Repeatable. The analysis context resolves those '
+            'libraries from the summary instead of their source.',
+      )
+      ..addOption(
+        'sdk-summary',
+        help:
+            'Analyzer summary of the Dart SDK\'s own libraries. Read with '
+            'each `--summary`, since a dependency summary refers to them.',
+        defaultsTo: '',
       );
 
     final ArgResults parsed;
@@ -202,6 +228,8 @@ class ShimArgs {
     final configJson = parsed['config'] as String;
     final pkgConfig = parsed['package-config'] as String;
     final sdkPath = parsed['sdk-path'] as String;
+    final summaries = (parsed['summary'] as List).cast<String>();
+    final sdkSummary = parsed['sdk-summary'] as String;
     final rootLvParts = rootLvRaw.split('.');
     if (rootLvParts.length != 2) {
       throw FormatException(
@@ -252,6 +280,8 @@ class ShimArgs {
       config: config,
       packageConfigUri: pkgConfig.isEmpty ? null : pkgConfig,
       sdkPath: sdkPath.isEmpty ? null : sdkPath,
+      summaryPaths: summaries,
+      sdkSummaryPath: sdkSummary.isEmpty ? null : sdkSummary,
       rootLanguageVersion: rootLv,
     );
   }
@@ -450,6 +480,10 @@ ShimArgs _absoluteArgs(ShimArgs a) => ShimArgs(
       ? _absAndNormalize(a.packageConfigUri!)
       : null,
   sdkPath: a.sdkPath != null ? _absAndNormalize(a.sdkPath!) : null,
+  summaryPaths: [for (final s in a.summaryPaths) _absAndNormalize(s)],
+  sdkSummaryPath: a.sdkSummaryPath != null
+      ? _absAndNormalize(a.sdkSummaryPath!)
+      : null,
   rootLanguageVersion: a.rootLanguageVersion,
 );
 
@@ -473,13 +507,29 @@ typedef AnalysisContextBuilder =
     Future<AnalysisContextCollection> Function({
       required List<String> includedPaths,
       required String? sdkPath,
+      required List<String> librarySummaryPaths,
     });
 
+/// With no [librarySummaryPaths] this is the public constructor, as it always
+/// was. With any, the analyzer resolves those libraries from their summaries;
+/// the `Impl` constructor is the only one that takes them.
 Future<AnalysisContextCollection> _defaultBuildAnalysisContext({
   required List<String> includedPaths,
   required String? sdkPath,
-}) async =>
-    AnalysisContextCollection(includedPaths: includedPaths, sdkPath: sdkPath);
+  required List<String> librarySummaryPaths,
+}) async {
+  if (librarySummaryPaths.isEmpty) {
+    return AnalysisContextCollection(
+      includedPaths: includedPaths,
+      sdkPath: sdkPath,
+    );
+  }
+  return AnalysisContextCollectionImpl(
+    includedPaths: includedPaths,
+    sdkPath: sdkPath,
+    librarySummaryPaths: librarySummaryPaths,
+  );
+}
 
 Future<void> _runWithStaging(
   ShimArgs args,
@@ -569,9 +619,14 @@ Future<void> _runWithStaging(
   // element drift loaded via `backend.readDart(drift2Uri)` (from the
   // drift pub-cache context). Forcing one context canonicalises them.
   final contextBuilder = buildAnalysisContext ?? _defaultBuildAnalysisContext;
+  final librarySummaryPaths = [
+    ...args.summaryPaths,
+    if (args.sdkSummaryPath != null) args.sdkSummaryPath!,
+  ];
   final collection = await contextBuilder(
     includedPaths: [stagingPath],
     sdkPath: args.sdkPath != null ? p.absolute(args.sdkPath!) : null,
+    librarySummaryPaths: librarySummaryPaths,
   );
 
   // CWD must contain a valid pubspec before any Builder runs; the shim
@@ -667,11 +722,18 @@ Future<void> _runWithStaging(
     // Release analyzer drivers, file-watching handles, and thread-pool
     // workers. Without this, a long-running worker accumulates drivers
     // across every request until it exhausts file descriptors.
-    try {
-      await collection.dispose();
-    } catch (_) {
-      // Older analyzer releases don't expose dispose; swallow so we don't
-      // regress workers on versions that lack it.
+    //
+    // Not with summaries: on analyzer 13.3 a dispose of a driver whose
+    // libraries came from summaries throws "Expected to link dart:core and
+    // dart:async first" inside the analyzer's scheduler. That error is not
+    // caught here, and it ends the worker's isolate.
+    if (librarySummaryPaths.isEmpty) {
+      try {
+        await collection.dispose();
+      } catch (_) {
+        // Older analyzer releases don't expose dispose; swallow so we don't
+        // regress workers on versions that lack it.
+      }
     }
   }
 

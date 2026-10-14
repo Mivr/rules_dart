@@ -84,8 +84,20 @@ All shim CLIs share this contract (`dart/ext/lib/builder_shim.dart:ShimArgs.pars
 --package-config <path>                  Synthesised package_config.json with
                                          every third-party pub dep.
 --sdk-path <dir>                         Dart SDK root for the analyzer.
+--summary <path>                         Analyzer summary of a dependency library
+                                         outside the input's package. Repeatable.
+                                         Under `//dart:analyzer_summaries` only.
+--sdk-summary <path>                     Analyzer summary of the SDK's libraries.
+                                         With any `--summary`, the analyzer reads
+                                         its libraries from summaries, not source.
 [--persistent_worker]                    Switches to bazel_worker protocol.
 ```
+
+With `//dart:analyzer_summaries` on, `dart_codegen` passes the summaries of
+its `deps` that are outside `package_name`; same-package sources stay sources.
+Under that flag a shim does not dispose its analyzer collection: on analyzer
+13.3 a dispose of a summary-linked driver throws inside the analyzer's
+scheduler and ends the worker.
 
 Rule layer: `dart_codegen`, `dart_aggregate_codegen`, `dart_sqlcodegen`
 in `dart/private/`. All three drive the same shim contract; they differ
