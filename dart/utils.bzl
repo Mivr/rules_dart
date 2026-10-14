@@ -99,11 +99,13 @@ runfiles_path = _runfiles_path
 derive_lib_root = _derive_lib_root
 derive_package_name = _derive_package_name
 
-# Source co-location: assemble a package whose hand-written and generated files
-# straddle the source tree and `bazel-out` into one tree-artifact directory, so
-# `part` directives and a single `rootUri` resolve at compile time. Any rule
-# calling `colocate_packages`/`colocate_entrypoint` must declare
-# `COPY_TO_DIRECTORY_TOOLCHAINS` in its `toolchains`.
+# Directory assembly: copy a package whose hand-written and generated files
+# straddle the source tree and `bazel-out` into one tree-artifact directory, for
+# a rule that needs one real `rootUri` per package. rules_dart's own executables
+# no longer copy (their multi-root compile resolves such a package in place), so
+# this is a copy per call. Any rule calling `colocate_packages`/
+# `colocate_entrypoint` must declare `COPY_TO_DIRECTORY_TOOLCHAINS` in its
+# `toolchains`.
 colocate_packages = _colocate_packages
 colocate_entrypoint = _colocate_entrypoint
 COPY_TO_DIRECTORY_TOOLCHAINS = _COPY_TO_DIRECTORY_TOOLCHAINS

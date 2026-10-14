@@ -62,11 +62,9 @@ def check_files_under_lib_root(label, lib_root, files, attr_name = "srcs"):
     """Detects `srcs`/`resources` entries that do not sit under the package's `lib/`.
 
     A Dart package resolves `package:<name>/x.dart` to `<lib_root>/lib/x.dart`,
-    and the consumer stages a package by stripping `lib_root` from each file
-    (`colocate_packages`). A file outside `<lib_root>/lib/` therefore lands
-    outside `lib/` in the staged tree and resolves to nothing. Nothing fails
-    until the kernel compile, which reports only a missing path inside a
-    `.pkgsrcs` directory — no target name, no mention of `lib/`.
+    so a file outside `<lib_root>/lib/` is reachable by no `package:` URI and
+    resolves to nothing. Nothing fails until the kernel compile, which reports
+    only a missing path — no target name, no mention of `lib/`.
 
     Generated files are subject to the same rule: `declare_file` paths are
     relative to the *producing* rule's Bazel package, so a codegen target
@@ -267,7 +265,7 @@ dart_library = rule(
     toolchains = MODULAR_KERNEL_TOOLCHAINS,
     attrs = {
         "srcs": attr.label_list(
-            doc = "Dart source files (`.dart`), source-tree or generated. Typically `glob([\"lib/**/*.dart\"])`, optionally plus `dart_codegen` outputs. Generated members are co-located with the rest of the package by the consuming `dart_binary`/`dart_test`. Mutually exclusive with `srcs_dir`.",
+            doc = "Dart source files (`.dart`), source-tree or generated. Typically `glob([\"lib/**/*.dart\"])`, optionally plus `dart_codegen` outputs. Generated members are compiled together with the rest of the package by the consuming `dart_binary`/`dart_test`. Mutually exclusive with `srcs_dir`.",
             allow_files = [".dart"],
         ),
         "resources": attr.label_list(

@@ -441,15 +441,17 @@ def package_agreement_error(merged):
 def merge_package_records(merged):
     """Dedups package records by name, unioning their code assets.
 
-    One `package_name` can legitimately appear with several `lib_root`s:
+    One `package_name` can legitimately appear in several records:
 
-      * a package split across `dart_library` targets — the case
-        `colocate_packages` exists to serve; and
+      * a package split across `dart_library` targets, whose records share a
+        `lib_root`, so the compile resolves all its files together (see
+        `executable_inputs`); and
       * a package supplied independently by two pub hubs, e.g. rules_flutter's
         `flutter.pub()` and rules_dart's `pub.from_lock()` both generating a
-        spoke for `ffi`.
+        spoke for `ffi`. These can carry different `lib_root`s.
 
-    So the first record wins for source resolution, as it always has. Code
+    So the first record wins for source resolution, as it always has, and the
+    result names each package at one `lib_root`. Code
     assets are the exception: dropping a later record's assets would silently
     lose a native library, and the failure would surface at runtime as an
     unresolved `@Native` symbol. Union them instead, and let
@@ -705,7 +707,7 @@ def generate_package_config(packages, all_srcs, config_file, roots = {}):
         config_file: The output File for package_config.json (used for dirname).
         roots: Dict of package name to exec-root-relative root, for packages
             whose root no file in `all_srcs` reveals — an executable's own
-            package with no `lib/` files (see `colocate_executable`). A root
+            package with no `lib/` files (see `executable_inputs`). A root
             found from the files wins.
 
     Returns:
@@ -811,7 +813,7 @@ def generate_stable_package_config(packages, all_srcs, roots = {}):
         packages: List of DartPackageInfo providers.
         all_srcs: List of File objects from the transitive source closure.
         roots: Dict of package name to exec-root-relative root for packages
-            whose files no `lib/` file reveals (see `colocate_executable`).
+            whose files no `lib/` file reveals (see `executable_inputs`).
             Only the keys are read: a package named here is kept.
 
     Returns:
@@ -1069,7 +1071,7 @@ def collect_transitive_srcs(deps):
 
     Returns a depset so consumers can feed action inputs / runfiles without
     flattening. Callers that genuinely inspect per-file paths (package
-    colocation, package_config root resolution) call `.to_list()` exactly
+    lookup, package_config root resolution) call `.to_list()` exactly
     once at that point.
 
     Args:

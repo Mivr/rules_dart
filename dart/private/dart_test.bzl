@@ -2,9 +2,9 @@
 
 Unified with `dart_binary`: the test's `main` is compiled to a self-contained
 kernel (`.dill`) **at build time**, so package resolution and `part`/`import`
-co-location happen in the execroot — exactly where `dart_binary` already proves
+resolution happen in the execroot — exactly where `dart_binary` already proves
 they work — and the test launcher merely runs the dill. No sources, no
-`package_config`, and no co-location are needed at runtime, so manifest-mode
+`package_config`, and no package layout are needed at runtime, so manifest-mode
 runfiles (Windows) are a non-issue.
 """
 
@@ -40,17 +40,15 @@ load(
 )
 load("//dart/private:dart_test_runner.bzl", "DartTestKernelInfo", "DartTestRunnerInfo")
 load("//dart/private:executable_package.bzl", "EXECUTABLE_PACKAGE_ATTRS", "executable_package")
-load("//dart/private:source_set.bzl", "COPY_TO_DIRECTORY_TOOLCHAINS", "colocate_executable")
+load("//dart/private:source_set.bzl", "executable_inputs")
 
 def _dart_test_impl(ctx):
     toolchain = ctx.toolchains["//dart:toolchain_type"]
     dart_sdk_info = toolchain.dart_sdk_info
     workspace_name = ctx.workspace_name
 
-    # Co-locate each dep package's source+generated (and split-across-targets)
-    # files into one real directory, and the test's own `main` with any generated
-    # sibling sources (e.g. a `.mocks.dart`), so the build-time compile resolves
-    # everything.
+    # The build-time compile resolves each package, and the test's own `main`
+    # with any generated sibling sources (e.g. a `.mocks.dart`), where they sit.
     own = executable_package(ctx, [ctx.file.main] + ctx.files.srcs)
     runner = _test_runner(ctx, own.packages)
     kernel = _compile_test_kernel(ctx, own, bootstrap = runner != None)
@@ -102,8 +100,8 @@ def _dart_test_impl(ctx):
         DefaultInfo(executable = executable, runfiles = runfiles),
         env_info,
         # See `dart_binary`: analyzable and fixable without becoming a valid
-        # `deps` entry. Built from the pre-colocation `ctx.file.main`, because
-        # the analyze/fix rules stage by `short_path`.
+        # `deps` entry. The analyze/fix rules stage by `short_path`, which is the
+        # source file's own path.
         own.analyzable,
     ]
 
@@ -157,23 +155,23 @@ def _compile_test_kernel(ctx, own, bootstrap):
     if kernel_tools != None:
         return _compile_modular_test_kernel(ctx, own, bootstrap, kernel_tools)
 
-    # The one flatten per rule: colocation inspects per-file paths.
-    colocated = colocate_executable(
-        ctx,
+    # Nothing is copied (see `executable_inputs`). The one flatten per rule: the
+    # package lookup inspects per-file paths.
+    inputs = executable_inputs(
         packages,
         collect_transitive_srcs(ctx.attr.deps).to_list(),
         ctx.file.main,
         ctx.files.srcs,
         own.record,
     )
-    packages = colocated.packages
-    main_input = colocated.main_input
-    main_arg = colocated.main_arg
-    compile_srcs = colocated.srcs
+    packages = inputs.packages
+    main_input = inputs.main_input
+    main_arg = inputs.main_arg
+    compile_srcs = inputs.srcs
     if bootstrap:
         # Under the runner the compiled entrypoint is a bootstrap that hands
-        # `main` to `package:test`; the test file itself becomes an input.
-        compile_srcs = compile_srcs + [main_input]
+        # `main` to `package:test`. The test file is among `compile_srcs`, so it
+        # is still an input.
         main_input = _write_bootstrap(ctx, main_arg)
         main_arg = main_input.path
 
@@ -183,7 +181,7 @@ def _compile_test_kernel(ctx, own, bootstrap):
     package_config = ctx.actions.declare_file(ctx.label.name + ".package_config.json")
     ctx.actions.write(
         output = package_config,
-        content = generate_stable_package_config(packages, compile_srcs, colocated.roots),
+        content = generate_stable_package_config(packages, compile_srcs, inputs.roots),
     )
 
     dill = _test_kernel_output(ctx, bootstrap)
@@ -399,8 +397,7 @@ def _write_bootstrap(ctx, main_path):
 
     Args:
       ctx: The rule context.
-      main_path: Exec-root-relative path of the test's (possibly colocated)
-        main file.
+      main_path: Exec-root-relative path of the test's main file, as compiled.
 
     Returns:
       The bootstrap File.
@@ -463,7 +460,7 @@ dart_test = rule(
         ),
     ),
     test = True,
-    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS + MODULAR_KERNEL_TOOLCHAINS,
+    toolchains = ["//dart:toolchain_type"] + MODULAR_KERNEL_TOOLCHAINS,
     doc = (
         "Compiles a Dart test to a kernel at build time and runs it with " +
         "asserts enabled. A test with `package:test` in `deps` runs under " +
@@ -475,7 +472,7 @@ dart_test = rule(
 dart_test_kernel = rule(
     implementation = _dart_test_kernel_impl,
     attrs = _TEST_KERNEL_ATTRS,
-    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS + MODULAR_KERNEL_TOOLCHAINS,
+    toolchains = ["//dart:toolchain_type"] + MODULAR_KERNEL_TOOLCHAINS,
     doc = (
         "Compiles a test to the kernel that `dart_test` runs under the " +
         "`package:test` runner, without a runner of its own. " +

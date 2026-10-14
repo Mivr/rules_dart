@@ -18,7 +18,7 @@ load(
 )
 load("//dart/private:dart_compile.bzl", "dart_compile_action", "recorded_uses_kind")
 load("//dart/private:executable_package.bzl", "EXECUTABLE_PACKAGE_ATTRS", "executable_package")
-load("//dart/private:source_set.bzl", "COPY_TO_DIRECTORY_TOOLCHAINS", "colocate_executable")
+load("//dart/private:source_set.bzl", "executable_inputs")
 
 def binary_output_basename(name, compile_mode, is_windows):
     """Returns a `dart_binary`'s output filename with the platform exe extension.
@@ -53,9 +53,6 @@ def _dart_binary_impl(ctx):
     toolchain = ctx.toolchains["//dart:toolchain_type"]
     dart_sdk_info = toolchain.dart_sdk_info
 
-    # Co-locate each dep package's source+generated (and split-across-targets)
-    # files into one real directory, and the binary's own `main` with any
-    # generated sibling sources, so the compile resolves everything.
     own = executable_package(ctx, [ctx.file.main] + ctx.files.srcs)
     packages = own.packages
 
@@ -64,19 +61,20 @@ def _dart_binary_impl(ctx):
         if hook_err != None:
             fail(hook_err)
 
-    # The one flatten per rule: colocation inspects per-file paths.
-    colocated = colocate_executable(
-        ctx,
+    # Nothing is copied: a package split between the source tree and `bazel-out`
+    # compiles in place, through the multi-root file system (`executable_inputs`).
+    # The one flatten per rule: the package lookup inspects per-file paths.
+    inputs = executable_inputs(
         packages,
         collect_transitive_srcs(ctx.attr.deps).to_list(),
         ctx.file.main,
         ctx.files.srcs,
         own.record,
     )
-    packages = colocated.packages
-    main_input = colocated.main_input
-    main_arg = colocated.main_arg
-    all_srcs = colocated.srcs
+    packages = inputs.packages
+    main_input = inputs.main_input
+    main_arg = inputs.main_arg
+    all_srcs = inputs.srcs
 
     # Root resolution must see the rule's own inputs too: a package whose
     # metadata comes from a srcs-less façade library resolves only via the
@@ -84,7 +82,7 @@ def _dart_binary_impl(ctx):
     package_config = ctx.actions.declare_file(ctx.label.name + ".package_config.json")
     ctx.actions.write(
         output = package_config,
-        content = generate_stable_package_config(packages, all_srcs, colocated.roots),
+        content = generate_stable_package_config(packages, all_srcs, inputs.roots),
     )
 
     # Determine output filename (Windows gets the `.exe` extension — see
@@ -209,9 +207,8 @@ def _dart_binary_impl(ctx):
             compile_mode = compile_mode,
         ),
         # What makes the `dart_analyze` aspect and `dart_fix` reach this entrypoint
-        # without making this target a legal `deps` entry. Built from the
-        # pre-colocation `ctx.file.main` on purpose: staging goes by
-        # `short_path`, and a colocated copy's is inside the assembled directory.
+        # without making this target a legal `deps` entry. Staging goes by
+        # `short_path`, which is the source file's own path.
         own.analyzable,
     ] + recorded_uses_info
 
@@ -297,6 +294,6 @@ the empty JSON object `{}` (`kind = "empty"`).""",
         ),
     }, **dict(DART_ABI_CONSTRAINT_ATTRS, **dict(EXTRA_DART_DEFINES_ATTR, **EXECUTABLE_PACKAGE_ATTRS))),
     executable = True,
-    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS,
+    toolchains = ["//dart:toolchain_type"],
     doc = "Compiles a Dart application using `dart compile`.",
 )
