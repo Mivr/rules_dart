@@ -30,8 +30,11 @@ it can only reach what is staged; the one way to share a yaml that governs no
 directory is a `package:` include of a package in the options target's `deps`.
 The formatter finds its `formatter:` section by the same walk, so both checks
 read one file's options from the same place, and
-`dart_format` stages the same files the same way (`stage_config_project`) for
-`bazel run`, so a run cannot format to settings the check does not apply.
+`dart_format` stages the same options the same way (`stage_config_project`) for
+`bazel run`, so a run cannot format to settings the check does not apply. The
+one difference is layout: the check names pub packages where they sit in the
+exec root, while `dart_format` copies them, because its project is read from
+runfiles.
 
 The format check names the target's own files individually and passes the
 language version of the target's own package on the command line. That version
@@ -171,7 +174,7 @@ def _wrapper_options(excluded):
             lines.append('    - "%s"' % path)
     return "\n".join(lines) + "\n"
 
-def stage_config_project(ctx, config, packages, files, own, name, sdk_version):
+def stage_config_project(ctx, config, packages, files, own, name, sdk_version, copy_external = True):
     """Stages a project holding every options file `config` lists.
 
     The one place a project is laid out for options to be found in: the
@@ -193,6 +196,8 @@ def stage_config_project(ctx, config, packages, files, own, name, sdk_version):
       name: Prefix for the staged paths.
       sdk_version: The toolchain SDK's version, the staged SDK constraint of a
         package that states no `language_version`.
+      copy_external: Passed to `stage_dart_project`. The aspect's actions pass
+        False; `dart_format` keeps True, since its project is read from runfiles.
 
     Returns:
       The `stage_dart_project` struct.
@@ -228,6 +233,7 @@ def stage_config_project(ctx, config, packages, files, own, name, sdk_version):
         },
         name = name,
         sdk_version = sdk_version,
+        copy_external = copy_external,
     )
 
 def _analyze(ctx, name, staged, sdk_inputs):
@@ -378,6 +384,7 @@ def _dart_analyze_aspect_impl(target, ctx):
         own.values(),
         name,
         sdk_version,
+        copy_external = False,
     )
 
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
@@ -394,7 +401,16 @@ def _dart_analyze_aspect_impl(target, ctx):
         groups["dart_analyze"] = depset([_analyze(ctx, name, staged, sdk_inputs)])
     if NO_FORMAT_TAG not in tags:
         by_version = _format_language_versions(info, own_paths)
-        format_staged = stage_config_project(ctx, config, [], own.values(), own.values(), name + ".format", sdk_version)
+        format_staged = stage_config_project(
+            ctx,
+            config,
+            [],
+            own.values(),
+            own.values(),
+            name + ".format",
+            sdk_version,
+            copy_external = False,
+        )
         groups["dart_format"] = depset([
             _format(
                 ctx,

@@ -606,6 +606,28 @@ def check_single_root_package(packages):
         ) % ", ".join(root_names)
     return None
 
+def package_exec_root(src, lib_root):
+    """Returns the exec-root-relative directory that holds `src`'s package.
+
+    `src.short_path` less the package's `lib_root` is the package-relative
+    tail (`/lib/...`, or empty for an opaque package directory); stripping
+    that tail off `src.path` leaves the directory the package sits in. For a
+    file generated into an external repository that directory is under
+    `bazel-out/`, not `external/`, which is how a caller can tell the two apart.
+
+    Args:
+        src: A File with `short_path` and `path`.
+        lib_root: The owning package's `lib_root`.
+
+    Returns:
+        The exec-root-relative directory, without a trailing slash.
+    """
+    suffix = src.short_path[len(lib_root):]
+    exec_root = src.path[:len(src.path) - len(suffix)]
+    if exec_root.endswith("/"):
+        exec_root = exec_root[:-1]
+    return exec_root
+
 def resolve_package_roots(packages, all_srcs):
     """Match packages to source files, returning exec-root-relative roots.
 
@@ -650,15 +672,7 @@ def resolve_package_roots(packages, all_srcs):
         if name == None or name in roots:
             continue
 
-        # The package-relative tail, stripped off the exec path to leave the
-        # root. Empty when the file *is* the package root (an assembled
-        # directory); otherwise "/lib/…", or "lib/…" for the root package,
-        # whose empty `lib_root` leaves a trailing slash to trim.
-        suffix = src.short_path[len(by_name[name].lib_root):]
-        exec_root = src.path[:len(src.path) - len(suffix)]
-        if exec_root.endswith("/"):
-            exec_root = exec_root[:-1]
-        roots[name] = exec_root
+        roots[name] = package_exec_root(src, by_name[name].lib_root)
     return roots
 
 def generate_package_config(packages, all_srcs, config_file, roots = {}):

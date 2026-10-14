@@ -142,8 +142,9 @@ void _copyFile(String from, String to) {
 /// outside the copied tree.
 ///
 /// Only the project directory is copied; the pub packages its config reaches
-/// through `../../<name>.extpkgs/...` stay where the sandbox staged them, and
-/// a relative URI no longer finds them from wherever scratch is. Absolute URIs
+/// through `../../<name>.extpkgs/...` or `../../external/<repo>` stay where the
+/// sandbox staged them, and a relative URI no longer finds them from wherever
+/// scratch is. Absolute URIs
 /// are how the copy keeps resolving those without copying pub trees or
 /// symlinking them in, which Windows cannot do unprivileged anyway.
 void _absolutizePackageConfig(String project, String scratch) {

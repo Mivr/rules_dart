@@ -63,7 +63,7 @@ def _dart_web_compile(ctx, compile_mode):
     all_srcs = ([ctx.file.main] + list(ctx.files.srcs) +
                 collect_transitive_srcs(ctx.attr.deps).to_list() +
                 collect_transitive_resources(ctx.attr.deps).to_list())
-    staged = stage_dart_project(ctx, packages, all_srcs)
+    staged = stage_dart_project(ctx, packages, all_srcs, copy_external = False)
 
     if compile_mode == "js":
         output = ctx.actions.declare_file(ctx.label.name + ".js")
