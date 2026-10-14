@@ -44,6 +44,18 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Whether test kernels are modular: each `dart_library` compiles its own sources
+# once, and a `dart_test` compiles only its entry and links the module kernels.
+# Off, each test compiles its whole closure into one kernel, as it did before.
+# Use the whole-program compile to rule modular compilation out when a build
+# misbehaves:
+#   bazel test //... --@rules_dart//dart:modular_kernel=false
+bool_flag(
+    name = "modular_kernel",
+    build_setting_default = True,
+    visibility = ["//visibility:public"],
+)
+
 # This is the target rule authors should put in their "toolchains"
 # attribute in order to get a runtime for the correct platform.
 # See https://docs.bazel.build/versions/main/toolchains.html#writing-rules-that-use-toolchains

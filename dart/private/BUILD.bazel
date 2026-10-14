@@ -95,11 +95,26 @@ bzl_library(
 )
 
 bzl_library(
+    name = "dart_kernel",
+    srcs = ["dart_kernel.bzl"],
+    visibility = ["//dart:__subpackages__"],
+    deps = [
+        ":common",
+        ":dart_info",
+        "//dart:providers",
+        "@bazel_skylib//rules:common_settings",
+    ],
+)
+
+bzl_library(
     name = "dart_library",
     srcs = ["dart_library.bzl"],
     visibility = ["//dart:__subpackages__"],
     deps = [
+        ":build_settings",
+        ":common",
         ":dart_info",
+        ":dart_kernel",
         "//dart:providers",
     ],
 )
@@ -133,6 +148,7 @@ bzl_library(
         ":build_settings",
         ":common",
         ":dart_compile",
+        ":dart_kernel",
         ":executable_package",
         ":source_set",
         "//dart:providers",
@@ -169,6 +185,7 @@ bzl_library(
         ":build_settings",
         ":common",
         ":dart_compile",
+        ":dart_kernel",
         ":executable_package",
         ":source_set",
         "//dart:providers",

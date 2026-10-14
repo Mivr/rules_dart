@@ -83,6 +83,29 @@ A `dart_test`'s runfiles carry only the parts of the SDK it needs to run its
 kernel. A test that runs SDK commands itself (`dart format`, `dart compile`)
 declares `@rules_dart//dart` in `data`, which brings the whole SDK.
 
+Test kernels are modular. Each `dart_library` compiles its own sources once, into
+one kernel per group of libraries that import each other, and an index of those
+kernels. A `dart_test` compiles only its own entry, and links in only the kernels
+its imports reach, so a library no test imports is never linked. Editing a leaf
+library recompiles that library and the executables that link it, not every test in
+the repository, and `package:test` is compiled once rather than once per test.
+
+A library's module compiles the sources it declares that can compile for the VM.
+The build reads each source's imports to decide which those are. A source that
+imports a `dart:` library the VM lacks, such as `dart:html`, is excluded, and so is
+every source that imports an excluded one. A conditional import takes its VM
+alternative. Each module's `.vm_excluded.txt` sidecar lists its excluded sources,
+and the modules above it read those sidecars. A test that reaches an excluded
+file compiles it from source along with its own code, so if the VM cannot run it,
+the test fails as it would under a whole-program compile. Set
+`--@rules_dart//dart:modular_kernel=false` to restore whole-program kernel
+compiles.
+
+A `dart_test` falls back to a whole-program compile on its own when its own
+`defines` attribute is set, or when its closure embeds native code assets. The
+`//dart:extra_dart_defines` flag does not cause a fallback: every module takes the
+same flag values.
+
 ### Using pub.dev packages
 
 Declare individual packages with `pub.package()`:

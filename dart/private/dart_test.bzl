@@ -28,6 +28,16 @@ load(
     "target_dart_abi",
 )
 load("//dart/private:dart_compile.bzl", "dart_compile_action")
+load(
+    "//dart/private:dart_kernel.bzl",
+    "DartKernelInfo",
+    "MODULAR_KERNEL_ATTRS",
+    "MODULAR_KERNEL_TOOLCHAINS",
+    "entry_source_uri",
+    "entry_sources",
+    "modular_executable_kernel",
+    "modular_executable_tools",
+)
 load("//dart/private:dart_test_runner.bzl", "DartTestKernelInfo", "DartTestRunnerInfo")
 load("//dart/private:executable_package.bzl", "EXECUTABLE_PACKAGE_ATTRS", "executable_package")
 load("//dart/private:source_set.bzl", "COPY_TO_DIRECTORY_TOOLCHAINS", "colocate_executable")
@@ -124,6 +134,29 @@ def _compile_test_kernel(ctx, own, bootstrap):
     if hook_err != None:
         fail(hook_err)
 
+    # Transitively propagated assets plus any named outright — see the same
+    # comment in `dart_binary`.
+    resolved_assets = resolve_code_assets(
+        ctx.label,
+        collect_transitive_code_assets(ctx.attr.deps),
+        [dep[DartCodeAssetInfo] for dep in ctx.attr.code_assets],
+    )
+    defines = merge_dart_defines(ctx)
+
+    kernel_tools = modular_executable_tools(
+        ctx,
+        [ctx.file.main] + ctx.files.srcs,
+        own.record,
+        kernel_mode = True,
+        resolved_assets = resolved_assets,
+        # The test's own `defines` only: the `extra_dart_defines` flag is the same
+        # for every module, so it does not stop a test going modular.
+        own_defines = ctx.attr.defines,
+        compile_flags = [],
+    )
+    if kernel_tools != None:
+        return _compile_modular_test_kernel(ctx, own, bootstrap, kernel_tools)
+
     # The one flatten per rule: colocation inspects per-file paths.
     colocated = colocate_executable(
         ctx,
@@ -153,25 +186,8 @@ def _compile_test_kernel(ctx, own, bootstrap):
         content = generate_stable_package_config(packages, compile_srcs, colocated.roots),
     )
 
-    if bootstrap:
-        # Declared where the runner's `--precompiled` layout expects it, so it
-        # is loaded in place: code-asset paths are relative to the dill, and a
-        # copy elsewhere would leave them pointing at nothing.
-        dill = ctx.actions.declare_file(
-            "%s.precompiled/%s.vm_test.vm.app.dill" % (ctx.label.name, _test_path(ctx)),
-        )
-    else:
-        dill = ctx.actions.declare_file(ctx.label.name + ".dill")
-    defines = merge_dart_defines(ctx)
+    dill = _test_kernel_output(ctx, bootstrap)
     runtime_libs = []
-
-    # Transitively propagated assets plus any named outright — see the same
-    # comment in `dart_binary`.
-    resolved_assets = resolve_code_assets(
-        ctx.label,
-        collect_transitive_code_assets(ctx.attr.deps),
-        [dep[DartCodeAssetInfo] for dep in ctx.attr.code_assets],
-    )
 
     if resolved_assets:
         # Embed the code-asset mapping in the kernel (`gen_kernel --native-assets`),
@@ -212,6 +228,82 @@ def _compile_test_kernel(ctx, own, bootstrap):
             defines = defines,
         )
     return struct(dill = dill, runtime_libs = runtime_libs)
+
+def _test_kernel_output(ctx, bootstrap):
+    """Declares the kernel a test runs from, in the place its runner expects.
+
+    Args:
+      ctx: The rule context.
+      bootstrap: Whether the test runs under the `package:test` runner.
+
+    Returns:
+      The output File.
+    """
+    if bootstrap:
+        # Declared where the runner's `--precompiled` layout expects it, so it
+        # is loaded in place: code-asset paths are relative to the dill, and a
+        # copy elsewhere would leave them pointing at nothing.
+        return ctx.actions.declare_file(
+            "%s.precompiled/%s.vm_test.vm.app.dill" % (ctx.label.name, _test_path(ctx)),
+        )
+    return ctx.actions.declare_file(ctx.label.name + ".dill")
+
+def _compile_modular_test_kernel(ctx, own, bootstrap, tools):
+    """Compiles a test's entry module and links it, in place of the monolithic kernel.
+
+    The entry module holds only the test (or its bootstrap) and the test's own
+    sources. Everything the test imports is in a dependency module, which the
+    link concatenates in. The sources are addressed by where they sit, so the
+    test's relative imports resolve as they do in the monolithic compile.
+
+    Args:
+      ctx: The rule context.
+      own: The `executable_package` result for the test's own sources.
+      bootstrap: Whether the test runs under the `package:test` runner.
+      tools: The exec kernel tools, from `modular_executable_tools`.
+
+    Returns:
+      `struct(dill, runtime_libs)`, as `_compile_test_kernel` returns. Modular
+      mode takes no code assets, so `runtime_libs` is empty.
+    """
+    dill = _test_kernel_output(ctx, bootstrap)
+    if bootstrap:
+        entry_files = [_write_modular_bootstrap(ctx), ctx.file.main]
+    else:
+        entry_files = [ctx.file.main]
+    modular_executable_kernel(
+        ctx,
+        tools,
+        entry_sources(entry_files + ctx.files.srcs),
+        own.packages,
+        [dep[DartKernelInfo] for dep in ctx.attr.deps],
+        dill,
+    )
+    return struct(dill = dill, runtime_libs = [])
+
+def _write_modular_bootstrap(ctx):
+    """Writes the modular entrypoint: the runner's bootstrap, importing the test by URI.
+
+    The monolithic bootstrap imports the test by a path relative to itself. A
+    modular entry module names every source by its `org-dartlang-bazel` URI, so
+    the import names the test the same way, and the test's own relative imports
+    resolve from that URI.
+
+    Args:
+      ctx: The rule context.
+
+    Returns:
+      The bootstrap File.
+    """
+    bootstrap = ctx.actions.declare_file(ctx.label.name + ".vm_test.dart")
+    ctx.actions.write(
+        output = bootstrap,
+        content = _BOOTSTRAP.format(
+            test = ctx.file.main.short_path,
+            import_path = entry_source_uri(ctx.file.main.short_path),
+        ),
+    )
+    return bootstrap
 
 def _dart_test_kernel_impl(ctx):
     own = executable_package(ctx, [ctx.file.main] + ctx.files.srcs)
@@ -354,7 +446,7 @@ runfiles so the Dart VM resolves them — no `dart:ffi` ceremony in the test sou
 must provide `DartCodeAssetInfo` (see the `dart_code_asset` rule).""",
         providers = [DartCodeAssetInfo],
     ),
-}, **dict(WINDOWS_CONSTRAINT_ATTR, **dict(DART_ABI_CONSTRAINT_ATTRS, **dict(EXTRA_DART_DEFINES_ATTR, **EXECUTABLE_PACKAGE_ATTRS))))
+}, **dict(WINDOWS_CONSTRAINT_ATTR, **dict(DART_ABI_CONSTRAINT_ATTRS, **dict(EXTRA_DART_DEFINES_ATTR, **dict(MODULAR_KERNEL_ATTRS, **EXECUTABLE_PACKAGE_ATTRS)))))
 
 dart_test = rule(
     implementation = _dart_test_impl,
@@ -371,7 +463,7 @@ dart_test = rule(
         ),
     ),
     test = True,
-    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS,
+    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS + MODULAR_KERNEL_TOOLCHAINS,
     doc = (
         "Compiles a Dart test to a kernel at build time and runs it with " +
         "asserts enabled. A test with `package:test` in `deps` runs under " +
@@ -383,7 +475,7 @@ dart_test = rule(
 dart_test_kernel = rule(
     implementation = _dart_test_kernel_impl,
     attrs = _TEST_KERNEL_ATTRS,
-    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS,
+    toolchains = ["//dart:toolchain_type"] + COPY_TO_DIRECTORY_TOOLCHAINS + MODULAR_KERNEL_TOOLCHAINS,
     doc = (
         "Compiles a test to the kernel that `dart_test` runs under the " +
         "`package:test` runner, without a runner of its own. " +

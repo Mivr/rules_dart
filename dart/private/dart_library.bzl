@@ -1,8 +1,10 @@
 """Implementation of the dart_library rule."""
 
 load("//dart:providers.bzl", "DartCodeAssetInfo", "DartInfo")
-load("//dart/private:common.bzl", "PACKAGE_IDENTITY_ATTRS", "codegen_identity_error", "resolve_package_identity")
+load("//dart/private:build_settings.bzl", "EXTRA_DART_DEFINES_ATTR")
+load("//dart/private:common.bzl", "PACKAGE_IDENTITY_ATTRS", "codegen_identity_error", "own_package_record", "resolve_package_identity")
 load("//dart/private:dart_info.bzl", "dart_info", "package_lib_prefix")
+load("//dart/private:dart_kernel.bzl", "KERNEL_MODULE_ATTRS", "MODULAR_KERNEL_TOOLCHAINS", "library_kernel_info")
 
 def derive_package_name(package_name_attr, label_package, label_name):
     """Derive the Dart package name from rule attributes and label.
@@ -218,6 +220,32 @@ def _dart_library_impl(ctx):
     if err != None:
         fail(err)
 
+    info = dart_info(
+        label = ctx.label,
+        package_name = package_name,
+        lib_root = lib_root,
+        deps = ctx.attr.deps,
+        srcs = own_srcs,
+        resources = own_resources,
+        code_assets = ctx.attr.code_assets,
+        language_version = identity.language_version,
+        has_unreplaced_hook = ctx.attr.has_unreplaced_hook,
+        version = ctx.attr.version,
+        link_hook = ctx.file.link_hook,
+    )
+
+    # The module kernel is declared, not built: an executable that links it is the
+    # only consumer that runs the action. A `srcs_dir` library is opaque, so its
+    # files are not known here and it cannot be compiled as a module.
+    kernel = library_kernel_info(
+        ctx,
+        own_package_record(info),
+        package_name,
+        lib_root,
+        own_srcs,
+        opaque = bool(ctx.attr.srcs_dir),
+    )
+
     # `dart_library` is a pure collector: it propagates its sources (source-tree
     # and/or generated) and package metadata unchanged. Co-location of a
     # package's split-across-targets / source+generated files into one real
@@ -228,23 +256,15 @@ def _dart_library_impl(ctx):
             files = depset(own_srcs + own_resources),
             runfiles = ctx.runfiles(files = own_srcs + own_resources),
         ),
-        dart_info(
-            label = ctx.label,
-            package_name = package_name,
-            lib_root = lib_root,
-            deps = ctx.attr.deps,
-            srcs = own_srcs,
-            resources = own_resources,
-            code_assets = ctx.attr.code_assets,
-            language_version = identity.language_version,
-            has_unreplaced_hook = ctx.attr.has_unreplaced_hook,
-            version = ctx.attr.version,
-            link_hook = ctx.file.link_hook,
-        ),
+        info,
+        kernel,
     ]
 
 dart_library = rule(
     implementation = _dart_library_impl,
+    # Optional: a build without an exec tools toolchain still analyses, and its
+    # libraries are simply not modular. See `library_kernel_info`.
+    toolchains = MODULAR_KERNEL_TOOLCHAINS,
     attrs = {
         "srcs": attr.label_list(
             doc = "Dart source files (`.dart`), source-tree or generated. Typically `glob([\"lib/**/*.dart\"])`, optionally plus `dart_codegen` outputs. Generated members are co-located with the rest of the package by the consuming `dart_binary`/`dart_test`. Mutually exclusive with `srcs_dir`.",
@@ -302,6 +322,6 @@ resolve at runtime.""",
         "version": attr.string(
             doc = "The package's own version, as resolved by pub (e.g. `2.2.0`). Set automatically by `pub.package()` / `pub.from_lock()`; leave it empty on hand-written targets, which have no resolved version to state. Its only use is agreement checking: when one package name arrives twice — two pub hubs each supplying `ffi`, say — a build whose two records name different versions would otherwise compile against whichever came first in dependency order, silently ignoring the other. Two *known*, differing versions fail the build; an empty one never conflicts.",
         ),
-    } | PACKAGE_IDENTITY_ATTRS,
-    doc = "Collects Dart sources and propagates dependency information via `DartInfo`. Does not compile or assemble; consumers co-locate generated sources.",
+    } | PACKAGE_IDENTITY_ATTRS | KERNEL_MODULE_ATTRS | EXTRA_DART_DEFINES_ATTR,
+    doc = "Collects Dart sources and propagates dependency information via `DartInfo`. Declares its module kernel (`DartKernelInfo`), which the executables that depend on it link; it is compiled only when one of them needs it. Consumers co-locate generated sources.",
 )

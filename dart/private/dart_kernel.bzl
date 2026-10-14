@@ -1,0 +1,719 @@
+"""Modular kernel compilation for `dart_library` and `dart_test`.
+
+Whole-program compilation puts every package in an executable's closure into that
+executable's own kernel. With 30 tests, `package:test` is compiled 30 times, and a
+one-line edit in a leaf library recompiles every test that reaches it.
+
+Modular compilation splits the work along `dart_library` boundaries. Each library
+compiles its own sources into a module: a directory of one kernel per component of
+its sources, and an index that lists them. An executable compiles only its entry
+module, and links the kernels it reaches through the indexes, in dependency order,
+which the VM runs as one program. A kernel nothing reaches is never linked.
+
+A module's package config names every package by a multi-root URI,
+`org-dartlang-bazel:///<path>`. The compiler resolves that against the source tree
+and the output tree alike, so a package split between the two (a `dart_codegen`
+part) is read where it lies and never copied.
+
+A module compiles the sources its library declares that can compile for the VM.
+`kernel_module` decides which those are from the import graph, before it compiles:
+a source that imports a `dart:` library the VM lacks, or a file that is excluded,
+is excluded, and so is every source that imports one. The excluded sources are
+listed in the module's `.vm_excluded.txt` sidecar, which the modules above it read.
+An executable whose entry module reaches an excluded file compiles that file from
+source, so it fails exactly as a whole-program compile would when the VM cannot run
+it.
+
+Every decision that can send an executable back to whole-program compilation is a
+pure function here, so each can be unit tested. The actions are built only when a
+consumer needs them, so a library used only by AOT binaries never compiles its
+module.
+"""
+
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("//dart:providers.bzl", "DartInfo")
+load(
+    "//dart/private:common.bzl",
+    "STABLE_SCHEME",
+    "collect_transitive_srcs",
+    "generate_stable_package_config",
+    "sdk_path_from_dart",
+    "stable_path",
+)
+load("//dart/private:dart_info.bzl", "package_lib_prefix")
+
+# The `org-dartlang-bazel` scheme `--multi-root` maps onto the exec root (`.`) and
+# the output directory (`ctx.bin_dir`). Its URIs are the exec-root-relative paths
+# a `File.short_path` already gives, so no path is copied or rewritten to make a
+# generated file reachable.
+
+EXEC_TOOLS_TOOLCHAIN = "//dart:exec_tools_toolchain_type"
+
+DartKernelInfo = provider(
+    doc = """A library's module, and the modules its closure links against.
+
+Read off any `dart_library`, and forwarded by a target that wraps one (see
+`dart_test_package`). A target that does not provide it, or whose closure is not
+modular, makes every executable that depends on it compile whole-program.""",
+    fields = {
+        "kmod": "File or None: this library's module, a directory of one kernel per component of its sources and an `index.json` that lists them. None for a façade with no sources of its own, and when no module is compiled.",
+        "transitive_kmods": "depset[File], postorder: the module directories of this library and every transitive dependency, dependencies first. A module names them as `--input-kmod`, and an executable's link reads their indexes.",
+        "modular": "bool: Whether this closure compiles and links module by module. False when anything in it cannot, and the consumer then compiles whole-program.",
+        "closure_excluded": "depset[File]: the `.vm_excluded.txt` sidecar of this library's module and of every module it links against. A dependent module reads them to exclude the sources that import an excluded file.",
+    },
+)
+
+# The build setting and the module compiler. `dart_library` takes these (its
+# module) and `dart_test` takes these plus the link tool (its entry module).
+# `dart_binary` takes none, so a tool it depends on can never depend back on it.
+#
+# `kernel_module` is a `dart_binary` with no pub dependencies, so it reaches no
+# `dart_library` and no cycle is possible.
+KERNEL_MODULE_ATTRS = {
+    "_modular_kernel": attr.label(
+        doc = "The `//dart:modular_kernel` build setting. When off, executables compile whole-program as before.",
+        default = Label("//dart:modular_kernel"),
+        providers = [BuildSettingInfo],
+    ),
+    "_kernel_module": attr.label(
+        doc = "The tool that compiles one module with `kernel_worker`, excluding the sources that cannot compile for the VM. See `kernel_module.dart`.",
+        default = Label("//dart/private/tools:kernel_module"),
+        executable = True,
+        cfg = "exec",
+    ),
+}
+
+MODULAR_KERNEL_ATTRS = KERNEL_MODULE_ATTRS | {
+    "_kernel_link": attr.label(
+        doc = "The tool that links an executable's kernel from the kernels its entry reaches. See `kernel_link.dart`.",
+        default = Label("//dart/private/tools:kernel_link"),
+        executable = True,
+        cfg = "exec",
+    ),
+}
+
+# Optional, so a build that registers no exec tools toolchain keeps compiling
+# whole-program rather than failing. See `kernel_tools_for`.
+MODULAR_KERNEL_TOOLCHAINS = [
+    config_common.toolchain_type(EXEC_TOOLS_TOOLCHAIN, mandatory = False),
+]
+
+def multi_root_uri(short_path):
+    """The `org-dartlang-bazel` URI for a path, or for a package root.
+
+    The URI is the shared stable URI of `common.bzl`, so the module compile and the
+    whole-program compile name a file the same way. The root package's empty
+    `lib_root` maps to the bare scheme root, which the scheme's roots resolve to the
+    exec root and the output directory.
+
+    Args:
+        short_path: A `File.short_path`, or a `DartPackageInfo.lib_root`.
+
+    Returns:
+        The URI string, e.g. `org-dartlang-bazel:///pkg/a`.
+    """
+    return STABLE_SCHEME + ":///" + stable_path(short_path)
+
+def entry_source_uri(short_path):
+    """The URI an entry module's source is compiled under.
+
+    Entry sources are addressed by where they sit, not by `package:` name, because
+    a test reaches its own files by relative path and that path has to resolve the
+    way it does in the monolithic compile.
+
+    Args:
+      short_path: The source's `File.short_path`.
+
+    Returns:
+      The URI string.
+    """
+    return multi_root_uri(short_path)
+
+def library_source_uri(package_name, lib_root, short_path):
+    """The `package:` URI of a library's own source.
+
+    The file's `short_path` lies under `<lib_root>/lib/`, which `dart_library`
+    enforces. The URI is that path relative to `lib/`, so the package config's
+    root for the package turns it back into the same file.
+
+    Args:
+      package_name: The package the library declares.
+      lib_root: The package's `lib_root`; empty for the root package.
+      short_path: The source's `File.short_path`.
+
+    Returns:
+      The URI string, e.g. `package:a/src/x.dart`.
+    """
+    prefix = package_lib_prefix(lib_root)
+    return "package:%s/%s" % (package_name, short_path[len(prefix):])
+
+def kernel_package_config(packages):
+    """The package config a module or an entry compiles against.
+
+    `generate_stable_package_config` with every package kept. Its filter drops a
+    package no file of `all_srcs` lives in, and a module must keep every package its
+    own sources may import, whichever files they are, so every name is given as a
+    root.
+
+    Args:
+        packages: `DartPackageInfo` records, one per package name.
+
+    Returns:
+        The `package_config.json` content.
+    """
+    return generate_stable_package_config(
+        packages,
+        [],
+        roots = {pkg.package_name: True for pkg in packages},
+    )
+
+def kernel_packages_consistent(records):
+    """Whether a closure's package records fit one multi-root URI per name.
+
+    A package config holds one `rootUri` per name. Two `lib_root`s under one name
+    (a package split across targets that sit in different directories, or two pub
+    hubs) cannot both be named, so the closure must compile whole-program. Two
+    root packages cannot share the bare scheme root either.
+
+    Args:
+      records: `DartPackageInfo` records, duplicates kept.
+
+    Returns:
+      True when every name has one `lib_root` and at most one package is the root.
+    """
+    root_of = {}
+    root_names = {}
+    for pkg in records:
+        seen = root_of.get(pkg.package_name)
+        if seen == None:
+            root_of[pkg.package_name] = pkg.lib_root
+        elif seen != pkg.lib_root:
+            return False
+        if not pkg.lib_root:
+            root_names[pkg.package_name] = True
+    return len(root_names) <= 1
+
+def first_per_package(records):
+    """Keeps the first record for each package name, in order.
+
+    Used for a module's package config, after `kernel_packages_consistent` has
+    confirmed that a name never appears with two roots. Unlike
+    `merge_package_records` this does not compare versions: a library analysed
+    alone should not fail on a disagreement that only an executable reaching both
+    could see, and that executable's own `merge_package_records` still reports it.
+
+    Args:
+      records: `DartPackageInfo` records, duplicates kept.
+
+    Returns:
+      One record per package name.
+    """
+    seen = {}
+    out = []
+    for pkg in records:
+        if pkg.package_name in seen:
+            continue
+        seen[pkg.package_name] = True
+        out.append(pkg)
+    return out
+
+def duplicated_source(short_paths):
+    """The first `short_path` that appears twice, or None.
+
+    The modular link concatenates module kernels, and each one defines the libraries
+    of its sources. A source that two modules both compile, or that the entry
+    module compiles as well as a module does, is defined twice in the linked
+    program. Whole-program compilation merges those by file, so it never saw the
+    problem.
+
+    Args:
+      short_paths: The `short_path` of every source that will be compiled.
+
+    Returns:
+      The repeated `short_path`, or None.
+    """
+    seen = {}
+    for path in short_paths:
+        if path in seen:
+            return path
+        seen[path] = True
+    return None
+
+def modular_kernel_eligible(
+        enabled,
+        kernel_mode,
+        dep_modular,
+        packages_consistent,
+        has_code_assets,
+        has_own_defines,
+        has_compile_flags,
+        has_duplicate_source,
+        same_sdk):
+    """Whether one executable compiles modularly, given every fact that decides it.
+
+    Each `False` is a reason the executable falls back to whole-program compilation,
+    which is always correct, only slower.
+
+    Args:
+      enabled: The `//dart:modular_kernel` flag.
+      kernel_mode: Whether the executable is a kernel (`dart_test` always is).
+      dep_modular: Whether every dependency's closure is modular.
+      packages_consistent: `kernel_packages_consistent` over the executable's closure.
+      has_code_assets: Whether native code assets are embedded in the kernel. The
+        embedding runs the front end over the whole program at once.
+      has_own_defines: Whether the executable's own `defines` attribute is set.
+        Modules compile with the `//dart:extra_dart_defines` flag, which is the same
+        for the whole build, so the flag's `-D`s are shared by every module. Only a
+        target's own `defines` cannot be shared, so only they fall back.
+      has_compile_flags: Whether `dart_compile_flags` are set. They reach
+        `dart compile`, which the modular path does not run.
+      has_duplicate_source: Whether `duplicated_source` found a repeat.
+      same_sdk: Whether the exec and target SDKs report the same version. A kernel
+        compiled by one is loaded by the other, and the VM accepts only its own
+        kernel format.
+
+    Returns:
+      True when the executable compiles modularly.
+    """
+    return (
+        enabled and
+        kernel_mode and
+        dep_modular and
+        packages_consistent and
+        not has_code_assets and
+        not has_own_defines and
+        not has_compile_flags and
+        not has_duplicate_source and
+        same_sdk
+    )
+
+def find_kernel_module_tools(dart_sdk_info):
+    """Locates the files a module compile and a link run from, in an SDK.
+
+    The worker snapshot `kernel_worker_aot.dart.snapshot` is absent from older SDKs.
+    Its absence is not an error: the library compiles no module and every consumer
+    compiles whole-program, exactly as it did before modular compilation existed.
+
+    Args:
+      dart_sdk_info: The `DartSdkInfo` of the exec tools toolchain.
+
+    Returns:
+      `struct(dartaotruntime, kernel_worker, platform_dill, libraries_json,
+      version)`, or None
+      when the SDK lacks the worker snapshot.
+    """
+    sdk_root = sdk_path_from_dart(dart_sdk_info.dart)
+    wanted = {
+        "dartaotruntime": [
+            sdk_root + "/bin/dartaotruntime",
+            sdk_root + "/bin/dartaotruntime.exe",
+        ],
+        "kernel_worker": [sdk_root + "/bin/snapshots/kernel_worker_aot.dart.snapshot"],
+        "platform_dill": [sdk_root + "/lib/_internal/vm_platform_strong.dill"],
+        "libraries_json": [sdk_root + "/lib/libraries.json"],
+    }
+    found = {}
+    for f in dart_sdk_info.compile_files.to_list():
+        for key, paths in wanted.items():
+            if f.path in paths:
+                found[key] = f
+    if len(found) != len(wanted):
+        return None
+    return struct(
+        dartaotruntime = found["dartaotruntime"],
+        kernel_worker = found["kernel_worker"],
+        platform_dill = found["platform_dill"],
+        libraries_json = found["libraries_json"],
+        version = dart_sdk_info.version,
+    )
+
+def kernel_tools_for(ctx):
+    """The exec SDK's kernel tools for a rule, or None when modular compile cannot run.
+
+    Modules are built on the exec platform. A kernel is platform-independent, and
+    the exec SDK is the one that runs on the machine doing the build.
+
+    Args:
+      ctx: A rule context that declares `EXEC_TOOLS_TOOLCHAIN`, optionally.
+
+    Returns:
+      The struct from `find_kernel_module_tools`, or None.
+    """
+    toolchain = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN]
+    if toolchain == None:
+        return None
+    return find_kernel_module_tools(toolchain.dart_sdk_info)
+
+def dep_kernels_or_none(deps):
+    """The `DartKernelInfo` of each dependency, or None if any lacks one.
+
+    Args:
+      deps: The `deps` attribute's targets.
+
+    Returns:
+      A list of `DartKernelInfo`, or None.
+    """
+    out = []
+    for dep in deps:
+        if DartKernelInfo not in dep:
+            return None
+        out.append(dep[DartKernelInfo])
+    return out
+
+def no_kernel_module():
+    """The `DartKernelInfo` of a library that compiles no module and is not modular.
+
+    Returns:
+      A `DartKernelInfo` whose `modular` is False.
+    """
+    return DartKernelInfo(
+        kmod = None,
+        transitive_kmods = depset(order = "postorder"),
+        modular = False,
+        closure_excluded = depset(),
+    )
+
+def kernel_module_action(
+        ctx,
+        tools,
+        sources,
+        packages,
+        dep_kmods,
+        output,
+        defines,
+        exclude_non_sources,
+        droppable,
+        extra_inputs = None,
+        closure_excluded = None):
+    """Compiles one module with `kernel_module`, which drives the persistent `kernel_worker`.
+
+    `kernel_module` is a Bazel persistent worker: it keeps one `kernel_worker` child
+    running, so each module compile reuses the loaded SDK, and a retry reuses the
+    same child. Everything except the wrapper's startup flags goes in a params file,
+    which keeps long dependency lists off the command line.
+
+    Args:
+      ctx: The rule context, carrying the `_kernel_module` executable.
+      tools: The struct from `find_kernel_module_tools`.
+      sources: `struct(uri, file)` for each source the module compiles. The URI is
+        the one the source is compiled under.
+      packages: The `DartPackageInfo` records the module's package config names.
+      dep_kmods: Postorder depset of the module directories it links against.
+      output: The module's directory File to produce. It holds one kernel per
+        component of the module's sources, and an `index.json` that lists them.
+      defines: The `-D` declarations every compile of this module takes. The
+        `//dart:extra_dart_defines` flag, the same for the whole build.
+      exclude_non_sources: Whether to emit only the listed sources, and not the
+        libraries reached through them. Both kinds pass True, so a module holds its
+        own libraries and an entry holds its own sources, and neither embeds the SDK
+        platform or a dependency library.
+      droppable: Whether `kernel_module` may retry once without the own sources
+        that fail for the VM. A library's module may, and one that still fails fails
+        the action. An entry module may not: dropping one of the test's own files
+        would silently run a test without it.
+      extra_inputs: A depset of files the compile may read beyond `sources`, such as
+        the closure's sources, which an entry module compiles from when it reaches
+        an excluded file. None for a library.
+      closure_excluded: A depset of the `.vm_excluded.txt` sidecars of the
+        module's upstream modules. None when there are none.
+
+    Returns:
+      The `.vm_excluded.txt` sidecar File, which lists each source that the module
+      excludes for the VM, and why.
+    """
+    package_config = ctx.actions.declare_file(output.basename + ".package_config.json")
+    ctx.actions.write(output = package_config, content = kernel_package_config(packages))
+    excluded = ctx.actions.declare_file(output.basename + ".vm_excluded.txt")
+
+    args = ctx.actions.args()
+    args.use_param_file("@%s", use_always = True)
+    args.set_param_file_format("multiline")
+
+    args.add("--target", "vm")
+    args.add("--dart-sdk-summary", tools.platform_dill)
+    args.add("--packages-file", package_config)
+    args.add("--libraries-json", tools.libraries_json)
+    args.add("--multi-root", ".")
+    args.add("--multi-root", ctx.bin_dir.path)
+    args.add("--multi-root-scheme", STABLE_SCHEME)
+    args.add_all(defines, format_each = "-D%s")
+
+    # The VM target does not support `--summary-only`: it prints an error and
+    # embeds the whole platform. Its absence keeps each kernel to its own libraries.
+    args.add("--no-summary-only")
+
+    # The worker keeps the platform and the dependency kernels loaded between
+    # requests, and reuses a result when a request repeats. It reads a file only
+    # through an input Bazel declared, and every request sends those inputs with
+    # their digests, so it never reads a file it was not given.
+    args.add("--reuse-compiler-result")
+    args.add("--use-incremental-compiler")
+    if exclude_non_sources:
+        args.add("--exclude-non-sources")
+    # A module directory is one argument, not its files: `expand_directories` is off.
+    args.add_all(dep_kmods, before_each = "--input-kmod", expand_directories = False)
+    for s in sources:
+        args.add("--source", s.uri)
+    args.add("--output", output.path)
+
+    # Read by `kernel_module` and not passed to `kernel_worker`.
+    args.add("--excluded-output", excluded)
+    if not droppable:
+        args.add("--no-drop")
+    if closure_excluded:
+        args.add_all(closure_excluded, before_each = "--closure-excluded")
+
+    ctx.actions.run(
+        executable = ctx.executable._kernel_module,
+        # The startup arguments name the SDK's compiler, so every module of one SDK
+        # shares one worker. Bazel keeps the process running as a worker, and sends
+        # each request's arguments through the params file.
+        arguments = [
+            "--kernel-worker",
+            tools.kernel_worker.path,
+            "--dartaotruntime",
+            tools.dartaotruntime.path,
+            args,
+        ],
+        inputs = depset(
+            direct = [
+                package_config,
+                tools.dartaotruntime,
+                tools.kernel_worker,
+                tools.libraries_json,
+                tools.platform_dill,
+            ] + [s.file for s in sources],
+            transitive = [dep_kmods] + [
+                d
+                for d in [extra_inputs, closure_excluded]
+                if d
+            ],
+        ),
+        outputs = [output, excluded],
+        mnemonic = "DartKernel",
+        progress_message = "Compiling Dart kernel module %s" % output.short_path,
+        execution_requirements = {
+            "supports-workers": "1",
+            "requires-worker-protocol": "proto",
+        },
+    )
+    return excluded
+
+def kernel_link_action(ctx, dep_kmods, entry, output):
+    """Links an executable's kernel from the kernels its entry reaches.
+
+    `kernel_link` reads each module's `index.json`, and writes the kernels reachable
+    from the entry's imports, each after the kernels it imports, then the entry's own.
+    The link tool reads only these directories, so it needs no SDK as an input.
+
+    Args:
+      ctx: The rule context, carrying the `_kernel_link` executable.
+      dep_kmods: Postorder depset of the dependency module directories.
+      entry: The entry module's directory, which holds its kernel and index.
+      output: The linked kernel File to produce.
+    """
+
+    # The module list can run long, and a Windows command line has a length limit,
+    # so the arguments go in a params file. The tool expands it.
+    args = ctx.actions.args()
+    args.use_param_file("@%s", use_always = True)
+    args.set_param_file_format("multiline")
+    args.add(output)
+    args.add(entry.path)
+    args.add_all(dep_kmods, expand_directories = False)
+    ctx.actions.run(
+        executable = ctx.executable._kernel_link,
+        arguments = [args],
+        inputs = depset(direct = [entry], transitive = [dep_kmods]),
+        outputs = [output],
+        mnemonic = "DartKernelLink",
+        progress_message = "Linking Dart kernel %s" % ctx.label,
+    )
+
+def entry_sources(files):
+    """Pairs each entry file with the URI it is compiled under.
+
+    Args:
+      files: The entry module's files, its entry point first.
+
+    Returns:
+      A list of `struct(uri, file)`.
+    """
+    return [struct(uri = entry_source_uri(f.short_path), file = f) for f in files]
+
+def global_dart_defines(ctx):
+    """The `//dart:extra_dart_defines` flag's values, shared by every module of a build.
+
+    Args:
+      ctx: A rule context carrying `_extra_dart_defines` (`EXTRA_DART_DEFINES_ATTR`).
+
+    Returns:
+      The list of `KEY` or `KEY=VALUE` strings.
+    """
+    return ctx.attr._extra_dart_defines[BuildSettingInfo].value
+
+def modular_executable_tools(
+        ctx,
+        own_files,
+        own_record,
+        kernel_mode,
+        resolved_assets,
+        own_defines,
+        compile_flags):
+    """Decides whether an executable compiles modularly, and with which tools.
+
+    Reads the flag and gathers each fact `modular_kernel_eligible` takes. The
+    caller then compiles modularly only when this returns tools.
+
+    Args:
+      ctx: The executable's rule context, carrying `MODULAR_KERNEL_ATTRS` and
+        `deps`.
+      own_files: The executable's own `.dart` files, its entry point first.
+      own_record: The executable's own `DartPackageInfo`, or None.
+      kernel_mode: Whether the executable is compiled as a kernel.
+      resolved_assets: The code assets resolved for the executable.
+      own_defines: The executable's own `defines` attribute. The
+        `//dart:extra_dart_defines` flag is not among them: every module takes it.
+      compile_flags: The executable's `dart_compile_flags`.
+
+    Returns:
+      The struct from `find_kernel_module_tools`, or None.
+    """
+    enabled = ctx.attr._modular_kernel[BuildSettingInfo].value
+    if not enabled or not kernel_mode:
+        return None
+    tools = kernel_tools_for(ctx)
+    if tools == None:
+        return None
+    target_sdk = ctx.toolchains["//dart:toolchain_type"].dart_sdk_info
+
+    kernels = dep_kernels_or_none(ctx.attr.deps)
+    dep_modular = kernels != None and all([k.modular for k in kernels])
+
+    records = depset(transitive = [dep[DartInfo].transitive_packages for dep in ctx.attr.deps]).to_list()
+    if own_record != None:
+        records = [own_record] + records
+
+    closure = collect_transitive_srcs(ctx.attr.deps).to_list()
+    duplicate = duplicated_source(
+        [f.short_path for f in own_files] + [f.short_path for f in closure],
+    )
+
+    eligible = modular_kernel_eligible(
+        enabled = enabled,
+        kernel_mode = kernel_mode,
+        dep_modular = dep_modular,
+        packages_consistent = kernel_packages_consistent(records),
+        has_code_assets = len(resolved_assets) > 0,
+        has_own_defines = len(own_defines) > 0,
+        has_compile_flags = len(compile_flags) > 0,
+        has_duplicate_source = duplicate != None,
+        same_sdk = tools.version == target_sdk.version,
+    )
+    return tools if eligible else None
+
+def modular_executable_kernel(ctx, tools, sources, packages, dep_kernels, output):
+    """Compiles an executable's entry module, then links it to `output`.
+
+    The entry compiles from source whatever it reaches that no dependency module
+    holds, so it takes the closure's sources as inputs: an excluded file is among
+    them, and the entry compiles it from source.
+
+    Args:
+      ctx: The rule context.
+      tools: The struct from `find_kernel_module_tools`.
+      sources: The entry module's `struct(uri, file)` list, its entry point first.
+      packages: The executable's `DartPackageInfo` records, its own first.
+      dep_kernels: The `DartKernelInfo` of each direct dependency.
+      output: The linked kernel File the executable runs.
+    """
+    dep_closure = depset(
+        order = "postorder",
+        transitive = [k.transitive_kmods for k in dep_kernels],
+    )
+    entry = ctx.actions.declare_directory(ctx.label.name + ".entry.kmod")
+    kernel_module_action(
+        ctx,
+        tools,
+        sources,
+        packages,
+        dep_closure,
+        entry,
+        defines = global_dart_defines(ctx),
+        exclude_non_sources = True,
+        droppable = False,
+        extra_inputs = collect_transitive_srcs(ctx.attr.deps),
+        closure_excluded = depset(transitive = [k.closure_excluded for k in dep_kernels]),
+    )
+    kernel_link_action(ctx, dep_closure, entry, output)
+
+def library_kernel_info(ctx, own_record, package_name, lib_root, own_srcs, opaque):
+    """The `DartKernelInfo` a `dart_library` provides.
+
+    The module is declared only here. Nothing builds it until an executable links
+    it, so a library reached only through AOT binaries compiles no module at all.
+
+    Args:
+      ctx: The `dart_library` rule context.
+      own_record: The library's own `DartPackageInfo`, or None.
+      package_name: The package the library declares.
+      lib_root: The package's `lib_root`.
+      own_srcs: The library's own `.dart` files.
+      opaque: True when the sources arrive as one directory (`srcs_dir`), whose
+        files are not known here.
+
+    Returns:
+      A `DartKernelInfo`.
+    """
+    if opaque or not ctx.attr._modular_kernel[BuildSettingInfo].value:
+        return no_kernel_module()
+    tools = kernel_tools_for(ctx)
+    if tools == None:
+        return no_kernel_module()
+    dep_kernels = dep_kernels_or_none(ctx.attr.deps)
+    if dep_kernels == None:
+        return no_kernel_module()
+
+    raw = depset(transitive = [dep[DartInfo].transitive_packages for dep in ctx.attr.deps]).to_list()
+    records = ([own_record] if own_record != None else []) + raw
+    modular = kernel_packages_consistent(records) and all([k.modular for k in dep_kernels])
+    if not modular:
+        return no_kernel_module()
+
+    dep_closure = depset(
+        order = "postorder",
+        transitive = [k.transitive_kmods for k in dep_kernels],
+    )
+    upstream_excluded = depset(transitive = [k.closure_excluded for k in dep_kernels])
+    if not own_srcs:
+        # A façade: nothing to compile, but its dependencies' modules still link.
+        return DartKernelInfo(
+            kmod = None,
+            transitive_kmods = dep_closure,
+            modular = True,
+            closure_excluded = upstream_excluded,
+        )
+
+    kmod = ctx.actions.declare_directory(ctx.label.name + ".kmod")
+    sources = [
+        struct(uri = library_source_uri(package_name, lib_root, f.short_path), file = f)
+        for f in own_srcs
+    ]
+    excluded = kernel_module_action(
+        ctx,
+        tools,
+        sources,
+        first_per_package(records),
+        dep_closure,
+        kmod,
+        defines = global_dart_defines(ctx),
+        exclude_non_sources = True,
+        droppable = True,
+        closure_excluded = upstream_excluded,
+    )
+    return DartKernelInfo(
+        kmod = kmod,
+        transitive_kmods = depset(order = "postorder", direct = [kmod], transitive = [dep_closure]),
+        modular = True,
+        closure_excluded = depset(direct = [excluded], transitive = [upstream_excluded]),
+    )

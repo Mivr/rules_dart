@@ -118,3 +118,22 @@ dart_binary(
         "@ext_pub_deps//:hooks",
     ],
 )
+
+# Concatenates module kernels into a modular `dart_test`'s kernel. See the file's
+# header.
+dart_binary(
+    name = "kernel_link",
+    compile_mode = "exe",
+    main = "kernel_link.dart",
+    visibility = ["//dart:__subpackages__"],
+)
+
+# Compiles one kernel module, excluding the sources that cannot compile for the VM.
+# A Bazel persistent worker. It has no pub dependencies on purpose: every `dart_library`
+# names it as an attribute, so depending on a `dart_library` would be a cycle.
+dart_binary(
+    name = "kernel_module",
+    compile_mode = "exe",
+    main = "kernel_module.dart",
+    visibility = ["//dart:__subpackages__"],
+)

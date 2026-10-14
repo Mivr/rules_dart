@@ -5,6 +5,7 @@ load(":common_test.bzl", "common_test_suite")
 load(":compile_flags_test.bzl", "compile_flags_test_suite")
 load(":dart_binary_test.bzl", "dart_binary_test_suite")
 load(":defines_test.bzl", "defines_test_suite")
+load(":kernel_test.bzl", "kernel_test_suite")
 load(":language_version_test.bzl", "language_version_test_suite")
 load(":library_test.bzl", "library_test_suite")
 load(":link_hook_test.bzl", "link_hook_test_suite")
@@ -49,6 +50,8 @@ yaml_parser_test_suite(name = "yaml_parser_test")
 codegen_test_suite(name = "codegen_test")
 
 source_set_test_suite(name = "source_set_test")
+
+kernel_test_suite(name = "kernel_test")
 
 language_version_test_suite(name = "language_version_test")
 

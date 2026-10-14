@@ -44,6 +44,7 @@ kernel runs instead, as before. Use it for a snapshot that misbehaves.
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//dart:providers.bzl", "DartInfo")
 load("//dart/private:common.bzl", "sdk_dartvm", "writable_home_env")
+load("//dart/private:dart_kernel.bzl", "DartKernelInfo")
 
 DartTestRunnerInfo = provider(
     doc = "The `package:test` runner built from a `package:test` library.",
@@ -109,11 +110,16 @@ def _dart_test_package_impl(ctx):
         snapshot = ctx.attr.snapshot[DartTestRunnerSnapshotInfo].snapshot
         if snapshot != None:
             runner = snapshot
+
+    # Forwarded beside `DartInfo`, because this target stands in for the library
+    # in every `deps`. Without it, each test that depends on `package:test` would
+    # find no module kernel for it and compile whole-program.
+    forwarded = [library[DartKernelInfo]] if DartKernelInfo in library else []
     return [
         library[DefaultInfo],
         library[DartInfo],
         DartTestRunnerInfo(runner = runner),
-    ]
+    ] + forwarded
 
 dart_test_package = rule(
     implementation = _dart_test_package_impl,
