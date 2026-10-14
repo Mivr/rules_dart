@@ -63,13 +63,7 @@ verification ran `//dart/tests/...`, `//dart/private/tools/...` and
 `//dart/runfiles/...` but not `//dart/ext/...`; it now runs `//dart/ext/...`
 with `--keep_going` (the sqlite targets cannot fetch in this sandbox).
 
-## Drop `bazel_lib` (plan #11)
+## Drop `bazel_lib` and `yaml.bzl` (plans #11, #15)
 
-The only use is `assemble_source_dir` (`copy_to_directory`). Being replaced by
-a `dart:io`-only copy tool behind a new `//dart:copy_toolchain_type`, so the
-public `COPY_TO_DIRECTORY_TOOLCHAINS` / `colocate_*` helpers keep working for
-downstream rule sets unchanged. Acceptance: copied trees byte-identical to
-`copy_to_directory`'s (shown on e2e/codegen, analysis staging, a tree-artifact
-fixture and an external-repo probe). Cost: about +30 ms per copy action (Dart
-exe startup vs Go). `bazel_lib` stays in users' graphs through `yaml.bzl`
-(plan #15), so the two land together with one lock refresh.
+Landed on `main` as `84c8767` and `5387726`; see `plan.md` and
+`for-rules-flutter.md`.

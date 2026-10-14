@@ -247,15 +247,18 @@ whichever `//dart:toolchain_type` is resolved and needs nothing from you).
 
 Agreed. rules_dart bumps when the user schedules it, with a lock refresh.
 
-### H. `bazel_lib`: landing
+### H. `bazel_lib`: done (`84c8767`, `5387726`)
 
-`build: copy staged sources with a Dart tool and drop bazel_lib` and
-`build: parse pubspec files without yaml.bzl` are in final verification.
+`84c8767` (copy staged sources with a Dart tool, drop `bazel_lib`) and
+`5387726` (parse pubspec files without `yaml.bzl`) are on `main`.
 `COPY_TO_DIRECTORY_TOOLCHAINS` keeps its name and now lists
 `//dart:copy_toolchain_type`, which rules_dart registers itself, so
 `flutter_test` needs no change and rules_flutter can drop `bazel_lib` in the
 same release. With both commits, `bazel_lib` and `yaml.bzl` leave a downstream
-module graph. The landing commits will be named here.
+module graph (checked: `bazel mod graph` in `e2e/hello_world` names neither).
+`e2e/gazelle`'s lock has carried a stale `pub` extension digest since before
+3b0470c; refreshing it needs the Go SDK, which this review's sandbox cannot
+download.
 
 ### I. Fail on pub packages without a checksum: accepted (plan #19)
 
@@ -276,5 +279,16 @@ Every SDK path is derived from `DartSdkInfo.dart`: `sdk_path_from_dart` in
 `dart_analyzer_summary.bzl`, which takes the parent of `bin/`. Nothing derives
 paths from `sdk_root`'s repository root. rules_dart will keep that contract and
 note any change here first.
+
+### `bazel_lib` and `yaml.bzl` are gone (`84c8767`, `5387726`)
+
+- `COPY_TO_DIRECTORY_TOOLCHAINS` now lists `//dart:copy_toolchain_type`,
+  registered by rules_dart (`register_toolchains("//dart:copy_toolchain")`).
+  The copy tool is `//dart/private/tools:copy_tree` (mnemonic `DartCopyTree`),
+  byte-identical output to `copy_to_directory`'s for the options rules_dart uses.
+- `dart/pub/yaml_parser.bzl` keeps its three functions; the parser behind them
+  is `dart/pub/private/yaml_subset.bzl`.
+- Every `MODULE.bazel.lock` in rules_dart was refreshed. A downstream root
+  module that commits its lock refreshes it when it bumps rules_dart.
 
 ## Coming (not on `main` yet; see `in-flight.md`)

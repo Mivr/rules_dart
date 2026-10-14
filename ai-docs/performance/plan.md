@@ -22,6 +22,8 @@ and CPU totals are the steadier signal. Raw numbers are in `results/`.
 | 10 | `8a1e20d` | `DartSdkInfo.analyze_files`: analyze, fix, summary and codegen actions get the analyze subset of the SDK | `DartAnalyze` inputs on `//:bad_lib`: 1,082 → 515 (SDK 1,049 → 482) |
 | 13 | `09c5905` | Whole-program `dart_binary` / `dart_test` compile split packages in place (multi-root) instead of copying them into `.pkgsrcs` trees | `e2e/codegen`, modular off: copy actions 8 → 1 (the `dart_source_set`) |
 | 12 | `4090db6`, `dfb6274` | Summary mode: a `srcs_dir` library no longer claims a package it has no summary for, generated libraries are summarized (own sources staged under their own root); `dart_codegen` resolves other packages from summaries under the flag | Codegen request (warm): mockito 0.64 → 0.35 s, built_value 0.35 → 0.27 s; output byte-identical |
+| 11 | `84c8767` | `bazel_lib` dropped: `copy_tree`, a `dart:io` tool behind `//dart:copy_toolchain_type`, replaces `copy_to_directory` | Copy output byte-identical; ~+30 ms per copy action (Dart exe start) |
+| 15 | `5387726` | `yaml.bzl` dropped: in-repo Starlark parser for pubspec files (parity over 654 real files) | `bazel_lib` and `yaml.bzl` gone from a downstream module graph; pub lock parse 94 → 53 ms |
 
 Overall, against the original `main` (`3b0470c`):
 
@@ -43,8 +45,6 @@ come from separate A/B runs.
 | #  | Item                                                                                       | State                                                                                                                                                                                                  |
 | -- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 14 | **Regression fixes** for modular compiles: a `dart_library` that does not compile on its own (`e2e/ext_exemplar`); a dependency library's `main` starting the linked test | Agent fixing; see `in-flight.md` |
-| 15 | Drop `yaml.bzl` (its `bazel_lib` dep is what keeps `bazel_lib` in users' graphs): in-repo Starlark pubspec parser | Agent implementing, stacked on #11 |
-| 11 | Drop `bazel_lib`: a Dart copy tool behind `//dart:copy_toolchain_type` | Agent implementing |
 
 ## Queued (agreed with the user, 2026-10-14)
 
