@@ -37,7 +37,7 @@ come from separate A/B runs.
 
 | #  | Item                                                                                       | State                                                                                                                                                                                                  |
 | -- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 7  | Modular kernel compilation: one module per `dart_library`, tests link by concatenation     | **Not landing.** Correct, but slower on the benchmark (clean 40 s vs 27 s; body edit 25 s vs 23 s) and 2.3x larger kernels. See `decisions.md`. |
+| 7  | Modular kernel compilation at library granularity (per-SCC kernels, pruned link, warm worker) | **Gates met on the bench**: clean 19.4 s vs 24.7 s, body edit 9.1 s vs 17.7 s, linked kernel 4.2 MB vs 13.1 MB. Lands after #9, then rebase and re-verify. |
 | 9  | Reproducible outputs: stable `org-dartlang-bazel:///` URIs via `gen_kernel`; deterministic snapshot training | Started. All 34 compiled outputs currently differ between clean builds.                                                                                                                 |
 
 ## Queued (agreed with the user, 2026-10-14)

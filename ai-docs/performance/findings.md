@@ -117,3 +117,27 @@ training kernel, the runner snapshot and the AOT `exe`.
 - With the bench's mirror registry, `rules_go`'s `go_sdk` extension spends ~30 s
   timing out on go.dev at every clean analysis. The bench blocks go.dev in a
   downloader config to keep that out of the numbers.
+
+## Modular at library granularity (2026-10-14)
+
+- Per-SCC kernels in one tree artifact per `dart_library`, with an `index.json`
+  of defined and imported keys. The link walks reachability from the entry.
+- Bench: clean 19.4 s vs 24.7 s whole-program; leaf body edit 9.1 s vs 17.7 s
+  (123 actions re-run vs 63, but each is cheap); linked `example_test` 4.2 MB vs
+  13.1 MB. Whole-program kernels embed the `dart:` libraries; the modular link
+  relies on the VM's platform. 334 vs 337 package libraries linked; the 3 extra
+  are unreached.
+- Warm `kernel_worker` with `--reuse-compiler-result
+  --use-incremental-compiler`: 7–11 ms per small component, vs 42–48 ms one-shot.
+  Peak RSS 409 MB.
+- Worker failure modes (no stdout corruption was reproducible):
+  - an undeclared input is an in-band error (`Expected to get digest for
+    file:///...`), and the path form must match exactly;
+  - a missing transitive `--input-linked` crashes the front end ("Crash when
+    compiling: Null check operator ... DillLoader"), after which the child stops
+    answering. The wrapper restarts it. Bazel does not expand tree artifacts in
+    `WorkRequest.inputs`, so the wrapper digests those files itself.
+- App-JIT snapshot bytes also depend on the absolute path of the `dart` binary
+  that trains them (not just its length). Training from a copy of `dart` +
+  `dartvm` at a fixed per-SDK-version path gave identical snapshots from two
+  SDK locations.
