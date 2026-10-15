@@ -43,5 +43,5 @@ with open(f"{out}/app.dill", "wb") as w:
 tl = time.time() - t
 t = time.time(); r = subprocess.run([f"{SDK}/bin/dart", f"{out}/app.dill"], capture_output=True, text=True); tr = time.time() - t
 print(f"main module {tm:.2f}s, link(cat) {tl*1000:.0f}ms, run {tr:.2f}s -> {r.stdout.strip()} {r.stderr.strip()[:300]}")
-t = time.time(); r = subprocess.run([f"{SDK}/bin/dart", "compile", "kernel", "--packages", f"{out}/package_config.json", "-o", f"{out}/mono.dill", f"{out}/main.dart"], capture_output=True, text=True, env={**os.environ, "HOME": "/tmp"}); 
+t = time.time(); r = subprocess.run([f"{SDK}/bin/dart", "compile", "kernel", "--packages", f"{out}/package_config.json", "-o", f"{out}/mono.dill", f"{out}/main.dart"], capture_output=True, text=True, env={**os.environ, "HOME": "/tmp"});
 print(f"monolithic dart compile kernel: {time.time()-t:.2f}s rc={r.returncode}")

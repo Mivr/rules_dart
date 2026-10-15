@@ -14,10 +14,10 @@ dart_library(
 
 dart_test(
     name = "testpkg_test",
-    size = "small",
-    main = "test/testpkg_test.dart",
     package_name = "testpkg_fixture",
+    size = "small",
     language_version = "3.11",
+    main = "test/testpkg_test.dart",
     deps = [":testpkg_lib"],
 )
 
@@ -33,10 +33,10 @@ default_mode_test(
 # not split the package, or every test using `package:test` falls back to source.
 dart_test(
     name = "testpkg_test_with_pkg_test",
-    size = "small",
-    main = "test/testpkg_with_pkg_test.dart",
     package_name = "testpkg_fixture",
+    size = "small",
     language_version = "3.11",
+    main = "test/testpkg_with_pkg_test.dart",
     deps = [
         ":testpkg_lib",
         "@ext_pub_deps//:test",

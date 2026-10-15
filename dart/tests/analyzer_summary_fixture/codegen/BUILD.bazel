@@ -14,11 +14,11 @@ load(
 # Built on the builder shim: it takes the summary flags.
 dart_codegen(
     name = "shim_codegen",
+    package_name = "codegen_fixture",
     src = "lib/shim_model.dart",
     generator_bin = "//dart/ext/json_serializable:shim",
     language_version = "3.11",
     output_suffixes = [".g.dart"],
-    package_name = "codegen_fixture",
     deps = ["//dart/tests/analyzer_summary_fixture/codegen/dep"],
 )
 
@@ -31,11 +31,11 @@ dart_binary(
 
 dart_codegen(
     name = "plain_codegen",
+    package_name = "codegen_fixture",
     src = "lib/plain_model.dart",
     generator_bin = ":plain_gen",
     language_version = "3.11",
     output_suffixes = [".g.dart"],
-    package_name = "codegen_fixture",
     deps = ["//dart/tests/analyzer_summary_fixture/codegen/dep"],
 )
 
@@ -43,11 +43,11 @@ dart_codegen(
 # flags go to it.
 dart_codegen(
     name = "flutter_codegen",
+    package_name = "codegen_flutter",
     src = "lib/flutter_model.dart",
     generator_bin = "//dart/ext/json_serializable:shim",
     language_version = "3.11",
     output_suffixes = [".g.dart"],
-    package_name = "codegen_flutter",
     deps = ["//dart/tests/analyzer_summary_fixture/flutter:sky_engine"],
 )
 

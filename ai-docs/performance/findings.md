@@ -52,12 +52,12 @@ training kernel, the runner snapshot and the AOT `exe`.
   `dart compile` resolves the package config to absolute file URIs. That is per
   sandbox and per machine, which also blocks remote-cache sharing.
 - Fix in progress: `gen_kernel --filesystem-scheme org-dartlang-bazel
-  --filesystem-root . --filesystem-root <bin_dir>`, with a package config whose
+--filesystem-root . --filesystem-root <bin_dir>`, with a package config whose
   roots are `org-dartlang-bazel:///<path>`. Stack traces then show
   `org-dartlang-bazel:///pkg/test/x_test.dart`.
 - App-JIT snapshot training, measured: three trainings in one directory gave
   three different snapshots, and `--deterministic` made them identical. The
-  *length* (not the content) of the absolute path the training runs in also
+  _length_ (not the content) of the absolute path the training runs in also
   changes the snapshot: same-length directories matched, different lengths
   didn't. The recipe is to copy the inputs into a fixed-length scratch dir
   (`/tmp/rules_dart_snapshot.XXXXXX`) and run there with relative arguments and
@@ -93,14 +93,14 @@ training kernel, the runner snapshot and the AOT `exe`.
 ## Analyzer summaries (spike, `package:analyzer` 13.3.0)
 
 - `AnalysisContextCollectionImpl(includedPaths:, sdkPath:, packageConfigFile:,
-  librarySummaryPaths:)`; `collection.contexts.single.driver`;
+librarySummaryPaths:)`; `collection.contexts.single.driver`;
   `driver.buildPackageBundle(uriList:)` returns `Uint8List`.
 - pkg29 (21 own files, 600-file closure) analyzed against summaries: 249 ms,
   against 789 ms from source, with identical diagnostics. A planted type error
   was still reported. With dependency sources removed, analysis still worked.
 - A summary build costs ~230 ms, mostly fixed. Summaries are ~39 KB.
 - `collection.dispose()` throws `Bad state: Expected to link dart:core and
-  dart:async first` after a summary build. Don't dispose; exit.
+dart:async first` after a summary build. Don't dispose; exit.
 - An SDK summary (`buildSdkSummary`) is required, or dependency summaries
   referencing `dart:io` fail with "Missing library".
 - `package:analyzer` on pub contains NO lint rules. The linter is the SDK's
@@ -128,11 +128,11 @@ training kernel, the runner snapshot and the AOT `exe`.
   relies on the VM's platform. 334 vs 337 package libraries linked; the 3 extra
   are unreached.
 - Warm `kernel_worker` with `--reuse-compiler-result
-  --use-incremental-compiler`: 7–11 ms per small component, vs 42–48 ms one-shot.
+--use-incremental-compiler`: 7–11 ms per small component, vs 42–48 ms one-shot.
   Peak RSS 409 MB.
 - Worker failure modes (no stdout corruption was reproducible):
   - an undeclared input is an in-band error (`Expected to get digest for
-    file:///...`), and the path form must match exactly;
+file:///...`), and the path form must match exactly;
   - a missing transitive `--input-linked` crashes the front end ("Crash when
     compiling: Null check operator ... DillLoader"), after which the child stops
     answering. The wrapper restarts it. Bazel does not expand tree artifacts in

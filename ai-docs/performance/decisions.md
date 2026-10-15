@@ -105,44 +105,47 @@ them, so emptied modules cascaded. `package:web` failing for the VM emptied
 `package:test`, and every test then compiled `package:test` from source. Entry
 modules compiled without `--exclude-non-sources` also embedded the SDK
 platform (38 MB each). Replaced with the `package:build_modules` approach:
+
 - a directive scanner reads each source's imports/exports/parts;
 - conditional imports are resolved for the VM (`lib/libraries.json`);
 - a file reaching a non-VM `dart:` library, or an excluded file, is excluded,
   file by file, through a per-module sidecar list.
-Remaining compile errors are real errors.
+  Remaining compile errors are real errors.
 
 **Modular kernels measured slower; not landing (agent).** With the import-graph
 planner, modular compilation was correct: 263/263 unit tests and all e2e
 passing in both modes. `package:test` was 25 of 32 files, its 7 browser files
 excluded, and 104 of 105 outputs were reproducible. On the benchmark it lost:
 
-| | Clean build | Leaf body edit |
-| --- | --- | --- |
-| Modular | 40.2 s (108 module compiles) | 25.0 s (60 modules + 30 links) |
-| Whole-program | 27.2 s (35 compiles) | 23.3 s (31 compiles) |
+|               | Clean build                  | Leaf body edit                 |
+| ------------- | ---------------------------- | ------------------------------ |
+| Modular       | 40.2 s (108 module compiles) | 25.0 s (60 modules + 30 links) |
+| Whole-program | 27.2 s (35 compiles)         | 23.3 s (31 compiles)           |
 
 Linked test kernels were 2.3x larger: 30 MB vs 13 MB, because a module holds
 every library of its package, and `package:analyzer`'s module alone is 18 MB.
 Causes:
+
 - no early cutoff, since the VM target has no outlines;
 - every module compile reloads every dependency kernel, because
   `kernel_worker`'s incremental mode deadlocks the worker.
-The work is kept in the worktree branch, and the planner (directive scanner,
-VM conditional-import resolution) is reusable.
+  The work is kept in the worktree branch, and the planner (directive scanner,
+  VM conditional-import resolution) is reusable.
 
 **Modular at library granularity (user).** Build each small library on its own
 and link only what is reachable; add worker-side reuse if needed. Implemented
 as follows (agent):
+
 - one Bazel action per `dart_library`, compiling each library SCC into its own
   kernel inside a tree artifact, with an index of defined and imported URIs;
 - `kernel_link` walks reachability from the test's entry and concatenates only
   the reachable SCC kernels;
 - `kernel_worker`'s `--reuse-compiler-result` keeps the platform and dependency
   kernels loaded, with its stdout-corruption bug fixed at the root.
-Gates to land: linked kernel within ~10% of whole-program size, faster clean
-build and body edit, reproducible, bounded worker memory. Barrel files
-(`pkg.dart` re-exporting everything) limit the body-edit win: every importer
-of the barrel still recompiles.
+  Gates to land: linked kernel within ~10% of whole-program size, faster clean
+  build and body edit, reproducible, bounded worker memory. Barrel files
+  (`pkg.dart` re-exporting everything) limit the body-edit win: every importer
+  of the barrel still recompiles.
 
 **Next items (user).** Do the analyzer-only SDK file set, drop `bazel_lib`,
 codegen on summaries, and multi-root in the fallback compile.

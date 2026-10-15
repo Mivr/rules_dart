@@ -11,7 +11,7 @@ dart_library(
         "lib/core.dart",
         "lib/ui.dart",
     ],
-    resources = ["lib/_embedder.yaml"],
     language_version = "3.11",
+    resources = ["lib/_embedder.yaml"],
     visibility = ["//visibility:public"],
 )

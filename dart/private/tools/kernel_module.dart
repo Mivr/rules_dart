@@ -996,13 +996,13 @@ class ScanResult {
 ScanResult? scanDirectives(String source, Set<String> vmLibraries) {
   try {
     return _Prologue(_Lexer(source), vmLibraries).parse();
-  } on _Unparseable {
+  } on _Unparsable {
     return null;
   }
 }
 
-class _Unparseable implements Exception {
-  const _Unparseable();
+class _Unparsable implements Exception {
+  const _Unparsable();
 }
 
 const _identKind = 0;
@@ -1119,13 +1119,13 @@ class _Lexer {
     final start = _at + delim.length;
     var at = start;
     while (true) {
-      if (at >= n) throw const _Unparseable();
+      if (at >= n) throw const _Unparsable();
       if (!raw && src[at] == '\\') {
         at += 2;
         continue;
       }
       if (src.startsWith(delim, at)) break;
-      if (!triple && src[at] == '\n') throw const _Unparseable();
+      if (!triple && src[at] == '\n') throw const _Unparsable();
       at++;
     }
     _at = at + delim.length;
@@ -1145,7 +1145,7 @@ class _Prologue {
 
   _Token _take() {
     final token = _lexer.take();
-    if (token == null) throw const _Unparseable();
+    if (token == null) throw const _Unparsable();
     return token;
   }
 
@@ -1159,7 +1159,7 @@ class _Prologue {
   bool _punct(String text) => _is(text, _punctKind);
 
   void _expect(String text) {
-    if (!_punct(text)) throw const _Unparseable();
+    if (!_punct(text)) throw const _Unparsable();
     _lexer.take();
   }
 
@@ -1172,13 +1172,13 @@ class _Prologue {
   }
 
   void _identToken() {
-    if (_take().kind != _identKind) throw const _Unparseable();
+    if (_take().kind != _identKind) throw const _Unparsable();
   }
 
   /// Adjacent string literals are one URI.
   String _string() {
     final token = _take();
-    if (token.kind != _stringKind) throw const _Unparseable();
+    if (token.kind != _stringKind) throw const _Unparsable();
     var value = token.text;
     while (_peek()?.kind == _stringKind) {
       value += _take().text;
@@ -1218,7 +1218,7 @@ class _Prologue {
       } else if (token.kind == _stringKind) {
         value = token.text;
       } else if (!(token.kind == _punctKind && token.text == '=')) {
-        throw const _Unparseable();
+        throw const _Unparsable();
       }
     }
     _lexer.take();

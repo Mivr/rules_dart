@@ -9,8 +9,8 @@ dart_library(
     name = "yaml_only",
     package_name = "yaml_only",
     srcs = ["lib/ui.dart"],
-    resources = ["lib/_embedder.yaml"],
     language_version = "3.11",
+    resources = ["lib/_embedder.yaml"],
     tags = ["no-dart-analyze"],
     visibility = ["//dart/tests:__subpackages__"],
 )
