@@ -409,9 +409,12 @@ def no_kernel_module():
     """
     return DartKernelInfo(
         kmod = None,
+        koutline = None,
         transitive_kmods = depset(order = "postorder"),
+        transitive_koutlines = depset(order = "postorder"),
         modular = False,
         closure_excluded = depset(),
+        cross_pkg_srcs = depset(),
         owned = depset(),
         edges = depset(),
         base_dill = None,
@@ -428,6 +431,7 @@ def kernel_module_action(
         defines,
         exclude_non_sources,
         droppable,
+        koutline = None,
         extra_inputs = None,
         closure_excluded = None,
         target = "vm",
@@ -463,6 +467,8 @@ def kernel_module_action(
         that fail for the VM. A library's module may, and one that still fails fails
         the action. An entry module may not: dropping one of the test's own files
         would silently run a test without it.
+      koutline: Optional directory File to receive stripped `.dill` outlines and
+        `index.json` for downstream `--input-kmod` compilation.
       extra_inputs: A depset of files the compile may read beyond `sources`, such as
         the closure's sources, which an entry module compiles from when it reaches
         an excluded file. None for a library.
@@ -529,6 +535,8 @@ def kernel_module_action(
     for s in sources:
         args.add("--source", s.uri)
     args.add("--output", output.path)
+    if koutline != None:
+        args.add("--output-outline", koutline.path)
 
     # Read by `kernel_module` and not passed to `kernel_worker`.
     args.add("--excluded-output", excluded)
@@ -563,7 +571,7 @@ def kernel_module_action(
                 if d
             ],
         ),
-        outputs = [output, excluded],
+        outputs = [output, excluded] + ([koutline] if koutline != None else []),
         mnemonic = "DartKernel",
         progress_message = "Compiling Dart kernel module %s" % output.short_path,
         execution_requirements = {
@@ -767,18 +775,25 @@ def modular_executable_kernel(
         order = "postorder",
         transitive = [k.transitive_kmods for k in dep_kernels],
     )
+    dep_outline_closure = depset(
+        order = "postorder",
+        transitive = [k.transitive_koutlines for k in dep_kernels],
+    )
+    cross_pkg_srcs = depset(
+        transitive = [k.cross_pkg_srcs for k in dep_kernels],
+    )
     entry = ctx.actions.declare_directory(ctx.label.name + ".entry.kmod")
     kernel_module_action(
         ctx,
         tools,
         sources,
         packages,
-        dep_closure,
+        dep_outline_closure,
         entry,
         defines = global_dart_defines(ctx),
         exclude_non_sources = True,
         droppable = False,
-        extra_inputs = collect_transitive_srcs(ctx.attr.deps),
+        extra_inputs = cross_pkg_srcs,
         closure_excluded = depset(transitive = [k.closure_excluded for k in dep_kernels]),
         target = target,
         platform_dill = platform_dill,
@@ -859,7 +874,17 @@ def library_kernel_info(
         order = "postorder",
         transitive = [k.transitive_kmods for k in dep_kernels],
     )
+    dep_outline_closure = depset(
+        order = "postorder",
+        transitive = [k.transitive_koutlines for k in dep_kernels],
+    )
     upstream_excluded = depset(transitive = [k.closure_excluded for k in dep_kernels])
+    has_cross_pkg_cycle = False
+    cross_pkg_srcs = (
+        depset(own_srcs, transitive = [collect_transitive_srcs(ctx.attr.deps)])
+        if has_cross_pkg_cycle
+        else depset(transitive = [k.cross_pkg_srcs for k in dep_kernels])
+    )
     owned = depset(
         [(str(ctx.label), f.short_path) for f in own_srcs],
         transitive = [k.owned for k in dep_kernels],
@@ -881,9 +906,12 @@ def library_kernel_info(
         # A façade: nothing to compile, but its dependencies' modules still link.
         return DartKernelInfo(
             kmod = None,
+            koutline = None,
             transitive_kmods = dep_closure,
+            transitive_koutlines = dep_outline_closure,
             modular = True,
             closure_excluded = upstream_excluded,
+            cross_pkg_srcs = cross_pkg_srcs,
             owned = owned,
             edges = edges,
             base_dill = base_dill,
@@ -891,6 +919,7 @@ def library_kernel_info(
         )
 
     kmod = ctx.actions.declare_directory(ctx.label.name + ".kmod")
+    koutline = ctx.actions.declare_directory(ctx.label.name + ".koutline")
     sources = [
         struct(uri = library_source_uri(package_name, lib_root, f.short_path), file = f)
         for f in own_srcs
@@ -900,8 +929,9 @@ def library_kernel_info(
         tools,
         sources,
         first_per_package(records),
-        dep_closure,
+        dep_outline_closure,
         kmod,
+        koutline = koutline,
         defines = global_dart_defines(ctx),
         exclude_non_sources = True,
         droppable = True,
@@ -927,9 +957,12 @@ def library_kernel_info(
         )
     return DartKernelInfo(
         kmod = kmod,
+        koutline = koutline,
         transitive_kmods = depset(order = "postorder", direct = [kmod], transitive = [dep_closure]),
+        transitive_koutlines = depset(order = "postorder", direct = [koutline], transitive = [dep_outline_closure]),
         modular = True,
         closure_excluded = depset(direct = [excluded], transitive = [upstream_excluded]),
+        cross_pkg_srcs = cross_pkg_srcs,
         owned = owned,
         edges = edges,
         base_dill = base_dill,

@@ -30,7 +30,7 @@
 // component of its own sources (libraries that import each other compile together,
 // and a part belongs to its library), and an `index.json` that lists them: each
 // kernel's file, the keys of the libraries it defines, and the keys it imports. A
-// component compiles against only the kernels it reaches, passed as `--input-linked`,
+// component compiles against only the kernels it reaches, passed as `--input-summary`,
 // and a kernel is written after every kernel it imports.
 //
 // A dependent module names its dependencies' directories with `--input-kmod`. It reads
@@ -69,6 +69,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'dill_outline.dart';
+
 const _kernelWorkerFlag = '--kernel-worker';
 const _dartaotruntimeFlag = '--dartaotruntime';
 const _persistentFlag = '--persistent_worker';
@@ -80,6 +82,7 @@ const _librariesJsonFlag = '--libraries-json';
 const _librariesPlatformFlag = '--libraries-platform';
 const _extraLibraryFlag = '--extra-library';
 const _inputKmodFlag = '--input-kmod';
+const _outputOutlineFlag = '--output-outline';
 
 /// The file in each module directory that lists its kernels.
 const _indexName = 'index.json';
@@ -218,6 +221,7 @@ Future<int> compileModule(
   final extraLibraries = <String>[];
   String? excludedPath;
   String? output;
+  String? outputOutline;
   String? packagesFile;
   String? librariesJson;
   var librariesPlatform = 'vm';
@@ -229,6 +233,8 @@ Future<int> compileModule(
       sources.add(rawArgs[++i]);
     } else if (arg == '--output') {
       output = rawArgs[++i];
+    } else if (arg == _outputOutlineFlag) {
+      outputOutline = rawArgs[++i];
     } else if (arg == _excludedOutputFlag) {
       excludedPath = rawArgs[++i];
     } else if (arg == _closureExcludedFlag) {
@@ -282,6 +288,9 @@ Future<int> compileModule(
     if (!await _readIndex(dir, graph, log)) return 1;
   }
   await Directory(output).create(recursive: true);
+  if (outputOutline != null) {
+    await Directory(outputOutline).create(recursive: true);
+  }
 
   // A file that a dependency module defines is linked from that module, so this module
   // neither compiles it nor excludes it. An excluded file in the closure counts only
@@ -309,7 +318,7 @@ Future<int> compileModule(
     final outcome = await compiler.run([
       ...base,
       for (final d in neededDills(entry.imports, graph)) ...[
-        '--input-linked',
+        '--input-summary',
         d,
       ],
       for (final source in entry.uris) ...['--source', source],
@@ -320,9 +329,18 @@ Future<int> compileModule(
       log.write(outcome.output);
       return 1;
     }
-    await _writeIndex(output, [
+    final entrySccs = [
       _Scc(dill: dill, keys: const [], uris: const [], imports: entry.imports),
-    ]);
+    ];
+    await _writeIndex(output, entrySccs);
+    if (outputOutline != null) {
+      final fullFile = File('$output/$dill');
+      if (await fullFile.exists()) {
+        final outlineBytes = stripDillToOutline(await fullFile.readAsBytes());
+        await File('$outputOutline/$dill').writeAsBytes(outlineBytes);
+      }
+      await _writeIndex(outputOutline, entrySccs);
+    }
     await File(excludedPath).writeAsString('');
     return 0;
   }
@@ -354,7 +372,7 @@ Future<int> compileModule(
       final outcome = await compiler.run([
         ...base,
         for (final d in neededDills(scc.imports, local)) ...[
-          '--input-linked',
+          '--input-summary',
           d,
         ],
         for (final uri in scc.uris) ...['--source', uri],
@@ -366,14 +384,19 @@ Future<int> compileModule(
         failedUris = scc.uris;
         break;
       }
+      var nodeDill = dillPath;
       final dillFile = File(dillPath);
       if (await dillFile.exists()) {
-        await dillFile.writeAsBytes(
-          _stripSourceCodeFromDill(await dillFile.readAsBytes()),
-        );
+        final rawBytes = await dillFile.readAsBytes();
+        if (outputOutline != null) {
+          final outlineBytes = stripDillToOutline(rawBytes);
+          nodeDill = '$outputOutline/${scc.dill}';
+          await File(nodeDill).writeAsBytes(outlineBytes);
+        }
+        await dillFile.writeAsBytes(_stripSourceCodeFromDill(rawBytes));
         _digestCache.remove(dillPath);
       }
-      final node = _Node(dillPath, scc.imports);
+      final node = _Node(nodeDill, scc.imports);
       for (final key in scc.keys) {
         local[key] = node;
       }
@@ -405,6 +428,9 @@ Future<int> compileModule(
     ];
   }
   await _writeIndex(output, sccs);
+  if (outputOutline != null) {
+    await _writeIndex(outputOutline, sccs);
+  }
 
   // Written even when nothing is excluded: the sidecar is a declared output. Its
   // `#` line is a count for the build log, and each excluded source is listed under
@@ -1701,8 +1727,8 @@ String _inputPath(Uint8List bytes) {
   return '';
 }
 
-/// The request's `inputs`, with a digest added for each `--input-linked` file that Bazel
-/// did not declare on its own.
+/// The request's `inputs`, with a digest added for each `--input-summary` or
+/// `--input-linked` file that Bazel did not declare on its own.
 Future<List<Uint8List>> _withDigests(
   List<String> args,
   List<Uint8List> inputs,
@@ -1710,7 +1736,7 @@ Future<List<Uint8List>> _withDigests(
   final declared = {for (final input in inputs) _inputPath(input)};
   final out = [...inputs];
   for (var i = 0; i + 1 < args.length; i++) {
-    if (args[i] != '--input-linked') continue;
+    if (args[i] != '--input-summary' && args[i] != '--input-linked') continue;
     final path = args[i + 1];
     if (!declared.add(path)) continue;
     out.add(_encodeInput(path, await _digestOf(path)));

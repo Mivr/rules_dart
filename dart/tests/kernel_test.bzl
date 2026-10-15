@@ -387,6 +387,7 @@ def _custom_kernel_module_fixture_impl(ctx):
         version = "3.11.0",
     )
     kmod = ctx.actions.declare_directory(ctx.label.name + ".kmod")
+    koutline = ctx.actions.declare_directory(ctx.label.name + ".koutline")
     excluded = kernel_module_action(
         ctx = ctx,
         tools = tools,
@@ -394,6 +395,7 @@ def _custom_kernel_module_fixture_impl(ctx):
         packages = [_pkg("a", "pkg/a", "3.9")],
         dep_kmods = depset(order = "postorder"),
         output = kmod,
+        koutline = koutline,
         defines = ["FLUTTER_WEB=false"],
         exclude_non_sources = True,
         droppable = True,
@@ -407,12 +409,15 @@ def _custom_kernel_module_fixture_impl(ctx):
     )
     info = no_kernel_module()
     return [
-        DefaultInfo(files = depset([kmod, excluded])),
+        DefaultInfo(files = depset([kmod, koutline, excluded])),
         DartKernelInfo(
             kmod = kmod,
+            koutline = koutline,
             transitive_kmods = info.transitive_kmods,
+            transitive_koutlines = info.transitive_koutlines,
             modular = True,
             closure_excluded = depset([excluded]),
+            cross_pkg_srcs = info.cross_pkg_srcs,
             owned = info.owned,
             edges = info.edges,
         ),
@@ -473,6 +478,11 @@ def _kernel_module_action_custom_params_test_impl(ctx):
         env,
         "--track-widget-creation" in argv,
         "extra_frontend_flags forwarded",
+    )
+    asserts.true(
+        env,
+        "--output-outline" in argv,
+        "--output-outline passed when koutline is given",
     )
 
     input_basenames = [f.basename for f in kernel_action.inputs.to_list()]

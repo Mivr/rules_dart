@@ -113,6 +113,7 @@ Future<_Result> _compile(
   List<String> inputKmods = const [],
   List<String> closureExcluded = const [],
   bool noDrop = false,
+  String? outputOutline,
   String? scheme,
   String? librariesPlatform,
   List<String> extraLibraries = const [],
@@ -125,6 +126,7 @@ Future<_Result> _compile(
     for (final source in sources) ...['--source', '$prefix$source'],
     '--output',
     output,
+    if (outputOutline != null) ...['--output-outline', outputOutline],
     '--excluded-output',
     excludedPath,
     '--packages-file',
@@ -302,7 +304,7 @@ void main() {
     expect(result.sourcesPerCall, [
       [_uri('pkg/lib/top.dart')],
     ]);
-    expect(_valuesAfter(result.calls.single, '--input-linked'), [
+    expect(_valuesAfter(result.calls.single, '--input-summary'), [
       '$dep/0.dill',
     ], reason: 'top links the kernel that defines shared');
   });
@@ -372,7 +374,7 @@ void main() {
     expect(result.defines, [
       ['pkg/lib/top.dart'],
     ]);
-    expect(_valuesAfter(result.calls.single, '--input-linked'), [
+    expect(_valuesAfter(result.calls.single, '--input-summary'), [
       '$defines/0.dill',
     ]);
   });
@@ -410,7 +412,7 @@ void main() {
       reason: 'the defining module supplies it',
     );
     expect(
-      _valuesAfter(entry.calls.single, '--input-linked'),
+      _valuesAfter(entry.calls.single, '--input-summary'),
       contains('$defines/0.dill'),
     );
   });
@@ -543,4 +545,18 @@ void main() {
       expect(result.calls.single, isNot(contains('--libraries-platform')));
     },
   );
+
+  test('--output-outline creates the outline directory and writes index.json without forwarding the flag', () async {
+    _write('pkg/lib/a.dart', "import 'dart:async';\nclass A {}\n");
+    final outlineDir = '${_root.path}/out/m.koutline';
+    final result = await _compile('m', [
+      'pkg/lib/a.dart',
+    ], outputOutline: outlineDir);
+    expect(result.code, 0);
+    expect(result.calls.single, isNot(contains('--output-outline')));
+    final outlineIndex = jsonDecode(
+      File('$outlineDir/index.json').readAsStringSync(),
+    ) as Map<String, dynamic>;
+    expect(outlineIndex, result.index);
+  });
 }

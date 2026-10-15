@@ -150,6 +150,7 @@ dart_binary(
 # names it as an attribute, so depending on a `dart_library` would be a cycle.
 dart_binary(
     name = "kernel_module",
+    srcs = ["dill_outline.dart"],
     compile_mode = "exe",
     main = "kernel_module.dart",
     visibility = ["//visibility:public"],
@@ -160,7 +161,10 @@ dart_binary(
 dart_test(
     name = "kernel_module_test",
     size = "small",
-    srcs = ["kernel_module.dart"],
+    srcs = [
+        "dill_outline.dart",
+        "kernel_module.dart",
+    ],
     main = "kernel_module_test.dart",
     deps = ["@ext_pub_deps//:test"],
 )

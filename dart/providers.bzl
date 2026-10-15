@@ -207,9 +207,12 @@ Read off any `dart_library`, and forwarded by a target that wraps one (see
 modular, makes every executable that depends on it compile whole-program.""",
     fields = {
         "kmod": "File or None: this library's module, a directory of one kernel per component of its sources and an `index.json` that lists them. None for a façade with no sources of its own, and when no module is compiled.",
-        "transitive_kmods": "depset[File], postorder: the module directories of this library and every transitive dependency, dependencies first. A module names them as `--input-kmod`, and an executable's link reads their indexes.",
+        "koutline": "File or None: this library's outline module, a directory of one outline kernel per component of its sources and an `index.json` that lists them. None for a façade with no sources of its own, and when no module is compiled.",
+        "transitive_kmods": "depset[File], postorder: the module directories of this library and every transitive dependency, dependencies first. An executable's link reads their indexes.",
+        "transitive_koutlines": "depset[File], postorder: the outline module directories of this library and every transitive dependency, dependencies first. A dependent module or entry module names them as `--input-kmod`.",
         "modular": "bool: Whether this closure compiles and links module by module. False when anything in it cannot, and the consumer then compiles whole-program.",
         "closure_excluded": "depset[File]: the `.vm_excluded.txt` sidecar of this library's module and of every module it links against. A dependent module reads them to exclude the sources that import an excluded file.",
+        "cross_pkg_srcs": "depset[File]: transitive `.dart` sources needed only when a cross-package cycle excludes sources from modular compilation.",
         "owned": "depset[(str, str)]: a `(label, short_path)` for each source of this library and of every library it depends on. An executable finds a source that two libraries list, see `duplicated_source`.",
         "edges": "depset[(str, str)]: a `(label, dep_label)` for each `dart_library` this library and every library it depends on names as a dependency. Read with `owned`, to tell a source two libraries list one under the other from two that do not depend on each other.",
         "base_dill": "File or None: optional pre-linked shared base `.dill` (e.g. for `package:test` or `package:flutter_test`) carried by this closure.",
