@@ -113,21 +113,32 @@ Future<_Result> _compile(
   List<String> inputKmods = const [],
   List<String> closureExcluded = const [],
   bool noDrop = false,
+  String? scheme,
+  String? librariesPlatform,
+  List<String> extraLibraries = const [],
+  String? packagesFile,
 }) async {
   final output = '${_root.path}/out/$name';
   final excludedPath = '$output.vm_excluded.txt';
+  final prefix = scheme == null ? _prefix : '$scheme:///';
   final args = <String>[
-    for (final source in sources) ...['--source', _uri(source)],
+    for (final source in sources) ...['--source', '$prefix$source'],
     '--output',
     output,
     '--excluded-output',
     excludedPath,
     '--packages-file',
-    '${_root.path}/package_config.json',
+    packagesFile ?? '${_root.path}/package_config.json',
     '--libraries-json',
     '${_root.path}/libraries.json',
+    if (librariesPlatform != null) ...[
+      '--libraries-platform',
+      librariesPlatform,
+    ],
+    for (final lib in extraLibraries) ...['--extra-library', lib],
     '--multi-root',
     _root.path,
+    if (scheme != null) ...['--multi-root-scheme', scheme],
     '--target',
     'vm',
     if (noDrop) '--no-drop',
@@ -413,6 +424,123 @@ void main() {
       final second = await _compile('m2', ['pkg/lib/a.dart', 'pkg/lib/b.dart']);
       expect(first.defines, second.defines);
       expect(first.index, second.index);
+    },
+  );
+
+  test(
+    'a custom --multi-root-scheme resolves package roots, sources and sidecars',
+    () async {
+      const appPrefix = 'org-dartlang-app:///';
+      _write(
+        'app_package_config.json',
+        jsonEncode({
+          'configVersion': 2,
+          'packages': [
+            for (final name in ['pkg', 'dep'])
+              {
+                'name': name,
+                'rootUri': '$appPrefix$name',
+                'packageUri': 'lib/',
+              },
+          ],
+        }),
+      );
+      _write('pkg/lib/a.dart', "import 'package:pkg/b.dart';\nclass A {}\n");
+      _write('pkg/lib/b.dart', "import 'dart:async';\nclass B {}\n");
+      _write('pkg/lib/web.dart', "import 'dart:html';\nclass Web {}\n");
+      final result = await _compile(
+        'app_m',
+        ['pkg/lib/a.dart', 'pkg/lib/b.dart', 'pkg/lib/web.dart'],
+        scheme: 'org-dartlang-app',
+        packagesFile: '${_root.path}/app_package_config.json',
+      );
+      expect(result.code, 0);
+      expect(result.defines, [
+        ['pkg/lib/b.dart'],
+        ['pkg/lib/a.dart'],
+      ]);
+      expect(result.excluded, {
+        '${appPrefix}pkg/lib/web.dart': 'dart:html is not a VM library',
+      });
+      expect(_valuesAfter(result.calls.first, '--multi-root-scheme'), [
+        'org-dartlang-app',
+      ]);
+    },
+  );
+
+  test('--extra-library makes dart:ui available for imports and conditional imports', () async {
+    _write('pkg/lib/widget.dart', "import 'dart:ui';\nclass W {}\n");
+    _write(
+      'pkg/lib/entry.dart',
+      "import 'stub.dart' if (dart.library.ui) 'real.dart';\n",
+    );
+    _write('pkg/lib/stub.dart', "import 'dart:html';\n");
+    _write('pkg/lib/real.dart', "import 'widget.dart';\n");
+
+    // Without `--extra-library ui`, `widget.dart` is excluded and `entry.dart`
+    // takes `stub.dart` (which imports `dart:html` and is also excluded).
+    final withoutUi = await _compile('no_ui', [
+      'pkg/lib/widget.dart',
+      'pkg/lib/entry.dart',
+      'pkg/lib/stub.dart',
+      'pkg/lib/real.dart',
+    ]);
+    expect(withoutUi.code, 0);
+    expect(withoutUi.defines, isEmpty);
+
+    // With `--extra-library ui`, `widget.dart` compiles and `entry.dart`
+    // resolves its conditional import to `real.dart`.
+    final withUi = await _compile(
+      'with_ui',
+      [
+        'pkg/lib/widget.dart',
+        'pkg/lib/entry.dart',
+        'pkg/lib/stub.dart',
+        'pkg/lib/real.dart',
+      ],
+      extraLibraries: ['ui', 'dart:nativewrappers'],
+    );
+    expect(withUi.code, 0);
+    expect(withUi.defines, [
+      ['pkg/lib/widget.dart'],
+      ['pkg/lib/real.dart'],
+      ['pkg/lib/entry.dart'],
+    ]);
+    expect(withUi.excluded, {
+      _uri('pkg/lib/stub.dart'): 'dart:html is not a VM library',
+    });
+    for (final call in withUi.calls) {
+      expect(call, isNot(contains('--extra-library')));
+    }
+  });
+
+  test(
+    '--libraries-platform includes both the named platform and vm libraries',
+    () async {
+      _write(
+        'libraries.json',
+        jsonEncode({
+          'vm': {
+            'libraries': {'async': {}, 'core': {}, 'io': {}},
+          },
+          'flutter': {
+            'libraries': {'ui': {}},
+          },
+        }),
+      );
+      _write(
+        'pkg/lib/both.dart',
+        "import 'dart:io';\nimport 'dart:ui';\nclass Both {}\n",
+      );
+      final result = await _compile('flutter_m', [
+        'pkg/lib/both.dart',
+      ], librariesPlatform: 'flutter');
+      expect(result.code, 0);
+      expect(result.excluded, isEmpty);
+      expect(result.defines, [
+        ['pkg/lib/both.dart'],
+      ]);
+      expect(result.calls.single, isNot(contains('--libraries-platform')));
     },
   );
 }

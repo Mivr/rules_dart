@@ -31,7 +31,7 @@ module.
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//dart:providers.bzl", "DartInfo")
+load("//dart:providers.bzl", "DartInfo", _DartKernelInfo = "DartKernelInfo")
 load(
     "//dart/private:common.bzl",
     "STABLE_SCHEME",
@@ -50,21 +50,7 @@ load("//dart/private:dart_info.bzl", "package_lib_prefix")
 _TOOLCHAIN_TYPE = Label("//dart:toolchain_type")
 EXEC_TOOLS_TOOLCHAIN = Label("//dart:exec_tools_toolchain_type")
 
-DartKernelInfo = provider(
-    doc = """A library's module, and the modules its closure links against.
-
-Read off any `dart_library`, and forwarded by a target that wraps one (see
-`dart_test_package`). A target that does not provide it, or whose closure is not
-modular, makes every executable that depends on it compile whole-program.""",
-    fields = {
-        "kmod": "File or None: this library's module, a directory of one kernel per component of its sources and an `index.json` that lists them. None for a façade with no sources of its own, and when no module is compiled.",
-        "transitive_kmods": "depset[File], postorder: the module directories of this library and every transitive dependency, dependencies first. A module names them as `--input-kmod`, and an executable's link reads their indexes.",
-        "modular": "bool: Whether this closure compiles and links module by module. False when anything in it cannot, and the consumer then compiles whole-program.",
-        "closure_excluded": "depset[File]: the `.vm_excluded.txt` sidecar of this library's module and of every module it links against. A dependent module reads them to exclude the sources that import an excluded file.",
-        "owned": "depset[(str, str)]: a `(label, short_path)` for each source of this library and of every library it depends on. An executable finds a source that two libraries list, see `duplicated_source`.",
-        "edges": "depset[(str, str)]: a `(label, dep_label)` for each `dart_library` this library and every library it depends on names as a dependency. Read with `owned`, to tell a source two libraries list one under the other from two that do not depend on each other.",
-    },
-)
+DartKernelInfo = _DartKernelInfo
 
 # The build setting and the module compiler. `dart_library` takes these (its
 # module) and `dart_test` takes these plus the link tool (its entry module).
@@ -101,8 +87,8 @@ MODULAR_KERNEL_TOOLCHAINS = [
     config_common.toolchain_type(EXEC_TOOLS_TOOLCHAIN, mandatory = False),
 ]
 
-def multi_root_uri(short_path):
-    """The `org-dartlang-bazel` URI for a path, or for a package root.
+def multi_root_uri(short_path, scheme = STABLE_SCHEME):
+    """The multi-root URI for a path, or for a package root.
 
     The URI is the shared stable URI of `common.bzl`, so the module compile and the
     whole-program compile name a file the same way. The root package's empty
@@ -111,13 +97,14 @@ def multi_root_uri(short_path):
 
     Args:
         short_path: A `File.short_path`, or a `DartPackageInfo.lib_root`.
+        scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
 
     Returns:
         The URI string, e.g. `org-dartlang-bazel:///pkg/a`.
     """
-    return STABLE_SCHEME + ":///" + stable_path(short_path)
+    return scheme + ":///" + stable_path(short_path)
 
-def entry_source_uri(short_path):
+def entry_source_uri(short_path, scheme = STABLE_SCHEME):
     """The URI an entry module's source is compiled under.
 
     Entry sources are addressed by where they sit, not by `package:` name, because
@@ -126,11 +113,12 @@ def entry_source_uri(short_path):
 
     Args:
       short_path: The source's `File.short_path`.
+      scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
 
     Returns:
       The URI string.
     """
-    return multi_root_uri(short_path)
+    return multi_root_uri(short_path, scheme = scheme)
 
 def library_source_uri(package_name, lib_root, short_path):
     """The `package:` URI of a library's own source.
@@ -150,7 +138,7 @@ def library_source_uri(package_name, lib_root, short_path):
     prefix = package_lib_prefix(lib_root)
     return "package:%s/%s" % (package_name, short_path[len(prefix):])
 
-def kernel_package_config(packages):
+def kernel_package_config(packages, scheme = STABLE_SCHEME):
     """The package config a module or an entry compiles against.
 
     `generate_stable_package_config` with every package kept. Its filter drops a
@@ -160,6 +148,7 @@ def kernel_package_config(packages):
 
     Args:
         packages: `DartPackageInfo` records, one per package name.
+        scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
 
     Returns:
         The `package_config.json` content.
@@ -168,6 +157,7 @@ def kernel_package_config(packages):
         packages,
         [],
         roots = {pkg.package_name: True for pkg in packages},
+        scheme = scheme,
     )
 
 def kernel_packages_consistent(records):
@@ -438,7 +428,14 @@ def kernel_module_action(
         exclude_non_sources,
         droppable,
         extra_inputs = None,
-        closure_excluded = None):
+        closure_excluded = None,
+        target = "vm",
+        platform_dill = None,
+        libraries_json = None,
+        libraries_platform = None,
+        extra_libraries = [],
+        scheme = STABLE_SCHEME,
+        extra_frontend_flags = []):
     """Compiles one module with `kernel_module`, which drives the persistent `kernel_worker`.
 
     `kernel_module` is a Bazel persistent worker: it keeps one `kernel_worker` child
@@ -470,27 +467,48 @@ def kernel_module_action(
         an excluded file. None for a library.
       closure_excluded: A depset of the `.vm_excluded.txt` sidecars of the
         module's upstream modules. None when there are none.
+      target: The `kernel_worker --target` name (`"vm"` by default; `"flutter"`
+        for Flutter modules).
+      platform_dill: The platform `.dill` File to compile against; defaults to
+        `tools.platform_dill`.
+      libraries_json: The `libraries.json` File the planner reads available `dart:`
+        libraries from; defaults to `tools.libraries_json`.
+      libraries_platform: Optional platform key in `libraries.json` (in addition to
+        `"vm"`) whose libraries are available on the target.
+      extra_libraries: Extra bare `dart:` library names (e.g. `["ui", "nativewrappers"]`)
+        available in `platform_dill` even when absent from `libraries.json`.
+      scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
+      extra_frontend_flags: Extra flags forwarded to `kernel_worker`.
 
     Returns:
       The `.vm_excluded.txt` sidecar File, which lists each source that the module
-      excludes for the VM, and why.
+      excludes for the target, and why.
     """
+    platform = platform_dill if platform_dill != None else tools.platform_dill
+    libraries = libraries_json if libraries_json != None else tools.libraries_json
     package_config = ctx.actions.declare_file(output.basename + ".package_config.json")
-    ctx.actions.write(output = package_config, content = kernel_package_config(packages))
+    ctx.actions.write(
+        output = package_config,
+        content = kernel_package_config(packages, scheme = scheme),
+    )
     excluded = ctx.actions.declare_file(output.basename + ".vm_excluded.txt")
 
     args = ctx.actions.args()
     args.use_param_file("@%s", use_always = True)
     args.set_param_file_format("multiline")
 
-    args.add("--target", "vm")
-    args.add("--dart-sdk-summary", tools.platform_dill)
+    args.add("--target", target)
+    args.add("--dart-sdk-summary", platform)
     args.add("--packages-file", package_config)
-    args.add("--libraries-json", tools.libraries_json)
+    args.add("--libraries-json", libraries)
+    if libraries_platform:
+        args.add("--libraries-platform", libraries_platform)
+    args.add_all(extra_libraries, before_each = "--extra-library")
     args.add("--multi-root", ctx.bin_dir.path)
     args.add("--multi-root", ".")
-    args.add("--multi-root-scheme", STABLE_SCHEME)
+    args.add("--multi-root-scheme", scheme)
     args.add_all(defines, format_each = "-D%s")
+    args.add_all(extra_frontend_flags)
 
     # The VM target does not support `--summary-only`: it prints an error and
     # embeds the whole platform. Its absence keeps each kernel to its own libraries.
@@ -535,8 +553,8 @@ def kernel_module_action(
                 package_config,
                 tools.dartaotruntime,
                 tools.kernel_worker,
-                tools.libraries_json,
-                tools.platform_dill,
+                libraries,
+                platform,
             ] + [s.file for s in sources],
             transitive = [dep_kmods] + [
                 d
@@ -585,16 +603,17 @@ def kernel_link_action(ctx, dep_kmods, entry, output):
         progress_message = "Linking Dart kernel %s" % ctx.label,
     )
 
-def entry_sources(files):
+def entry_sources(files, scheme = STABLE_SCHEME):
     """Pairs each entry file with the URI it is compiled under.
 
     Args:
       files: The entry module's files, its entry point first.
+      scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
 
     Returns:
       A list of `struct(uri, file)`.
     """
-    return [struct(uri = entry_source_uri(f.short_path), file = f) for f in files]
+    return [struct(uri = entry_source_uri(f.short_path, scheme = scheme), file = f) for f in files]
 
 def global_dart_defines(ctx):
     """The `//dart:extra_dart_defines` flag's values, shared by every module of a build.
@@ -605,6 +624,8 @@ def global_dart_defines(ctx):
     Returns:
       The list of `KEY` or `KEY=VALUE` strings.
     """
+    if not hasattr(ctx.attr, "_extra_dart_defines"):
+        return []
     return ctx.attr._extra_dart_defines[BuildSettingInfo].value
 
 def modular_executable_tools(
@@ -634,7 +655,7 @@ def modular_executable_tools(
     Returns:
       The struct from `find_kernel_module_tools`, or None.
     """
-    enabled = ctx.attr._modular_kernel[BuildSettingInfo].value
+    enabled = ctx.attr._modular_kernel[BuildSettingInfo].value if hasattr(ctx.attr, "_modular_kernel") else True
     if not enabled or not kernel_mode:
         return None
     tools = kernel_tools_for(ctx)
@@ -666,7 +687,20 @@ def modular_executable_tools(
     )
     return tools if eligible else None
 
-def modular_executable_kernel(ctx, tools, sources, packages, dep_kernels, output):
+def modular_executable_kernel(
+        ctx,
+        tools,
+        sources,
+        packages,
+        dep_kernels,
+        output,
+        target = "vm",
+        platform_dill = None,
+        libraries_json = None,
+        libraries_platform = None,
+        extra_libraries = [],
+        scheme = STABLE_SCHEME,
+        extra_frontend_flags = []):
     """Compiles an executable's entry module, then links it to `output`.
 
     The entry compiles from source whatever it reaches that no dependency module
@@ -680,6 +714,13 @@ def modular_executable_kernel(ctx, tools, sources, packages, dep_kernels, output
       packages: The executable's `DartPackageInfo` records, its own first.
       dep_kernels: The `DartKernelInfo` of each direct dependency.
       output: The linked kernel File the executable runs.
+      target: The `kernel_worker --target` name (`"vm"` by default).
+      platform_dill: Optional platform `.dill` File override.
+      libraries_json: Optional `libraries.json` File override.
+      libraries_platform: Optional platform key in `libraries.json`.
+      extra_libraries: Extra bare `dart:` library names available on the target.
+      scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
+      extra_frontend_flags: Extra flags forwarded to `kernel_worker`.
     """
     dep_closure = depset(
         order = "postorder",
@@ -698,10 +739,30 @@ def modular_executable_kernel(ctx, tools, sources, packages, dep_kernels, output
         droppable = False,
         extra_inputs = collect_transitive_srcs(ctx.attr.deps),
         closure_excluded = depset(transitive = [k.closure_excluded for k in dep_kernels]),
+        target = target,
+        platform_dill = platform_dill,
+        libraries_json = libraries_json,
+        libraries_platform = libraries_platform,
+        extra_libraries = extra_libraries,
+        scheme = scheme,
+        extra_frontend_flags = extra_frontend_flags,
     )
     kernel_link_action(ctx, dep_closure, entry, output)
 
-def library_kernel_info(ctx, own_record, package_name, lib_root, own_srcs, opaque):
+def library_kernel_info(
+        ctx,
+        own_record,
+        package_name,
+        lib_root,
+        own_srcs,
+        opaque,
+        target = "vm",
+        platform_dill = None,
+        libraries_json = None,
+        libraries_platform = None,
+        extra_libraries = [],
+        scheme = STABLE_SCHEME,
+        extra_frontend_flags = []):
     """The `DartKernelInfo` a `dart_library` provides.
 
     The module is declared only here. Nothing builds it until an executable links
@@ -715,11 +776,19 @@ def library_kernel_info(ctx, own_record, package_name, lib_root, own_srcs, opaqu
       own_srcs: The library's own `.dart` files.
       opaque: True when the sources arrive as one directory (`srcs_dir`), whose
         files are not known here.
+      target: The `kernel_worker --target` name (`"vm"` by default).
+      platform_dill: Optional platform `.dill` File override.
+      libraries_json: Optional `libraries.json` File override.
+      libraries_platform: Optional platform key in `libraries.json`.
+      extra_libraries: Extra bare `dart:` library names available on the target.
+      scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
+      extra_frontend_flags: Extra flags forwarded to `kernel_worker`.
 
     Returns:
       A `DartKernelInfo`.
     """
-    if opaque or not ctx.attr._modular_kernel[BuildSettingInfo].value:
+    enabled = ctx.attr._modular_kernel[BuildSettingInfo].value if hasattr(ctx.attr, "_modular_kernel") else True
+    if opaque or not enabled:
         return no_kernel_module()
     tools = kernel_tools_for(ctx)
     if tools == None:
@@ -774,6 +843,13 @@ def library_kernel_info(ctx, own_record, package_name, lib_root, own_srcs, opaqu
         exclude_non_sources = True,
         droppable = True,
         closure_excluded = upstream_excluded,
+        target = target,
+        platform_dill = platform_dill,
+        libraries_json = libraries_json,
+        libraries_platform = libraries_platform,
+        extra_libraries = extra_libraries,
+        scheme = scheme,
+        extra_frontend_flags = extra_frontend_flags,
     )
     return DartKernelInfo(
         kmod = kmod,

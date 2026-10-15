@@ -77,6 +77,8 @@ const _persistentFlag = '--persistent_worker';
 const _excludedOutputFlag = '--excluded-output';
 const _closureExcludedFlag = '--closure-excluded';
 const _librariesJsonFlag = '--libraries-json';
+const _librariesPlatformFlag = '--libraries-platform';
+const _extraLibraryFlag = '--extra-library';
 const _inputKmodFlag = '--input-kmod';
 
 /// The file in each module directory that lists its kernels.
@@ -84,8 +86,9 @@ const _indexName = 'index.json';
 const _noDropFlag = '--no-drop';
 const _packagesFlag = '--packages-file';
 const _multiRootFlag = '--multi-root';
+const _multiRootSchemeFlag = '--multi-root-scheme';
 
-const _multiRootPrefix = 'org-dartlang-bazel:///';
+const _defaultMultiRootPrefix = 'org-dartlang-bazel:///';
 
 /// `<path>:<line>:<col>: Error: <message>`, one per located diagnostic.
 final _errorLine = RegExp(r'^(.+?):(\d+):(\d+): Error: (.*)$', multiLine: true);
@@ -212,10 +215,13 @@ Future<int> compileModule(
   final multiRoots = <String>[];
   final closureExcluded = <String>[];
   final inputKmods = <String>[];
+  final extraLibraries = <String>[];
   String? excludedPath;
   String? output;
   String? packagesFile;
   String? librariesJson;
+  var librariesPlatform = 'vm';
+  var multiRootPrefix = _defaultMultiRootPrefix;
   var noDrop = false;
   for (var i = 0; i < rawArgs.length; i++) {
     final arg = rawArgs[i];
@@ -231,6 +237,10 @@ Future<int> compileModule(
       inputKmods.add(rawArgs[++i]);
     } else if (arg == _librariesJsonFlag) {
       librariesJson = rawArgs[++i];
+    } else if (arg == _librariesPlatformFlag) {
+      librariesPlatform = rawArgs[++i];
+    } else if (arg == _extraLibraryFlag) {
+      extraLibraries.add(rawArgs[++i]);
     } else if (arg == _noDropFlag) {
       noDrop = true;
     } else if (arg == '--input-linked') {
@@ -241,6 +251,9 @@ Future<int> compileModule(
     } else {
       if (arg == _packagesFlag) packagesFile = rawArgs[i + 1];
       if (arg == _multiRootFlag) multiRoots.add(rawArgs[i + 1]);
+      if (arg == _multiRootSchemeFlag) {
+        multiRootPrefix = '${rawArgs[i + 1]}:///';
+      }
       base.add(arg);
     }
   }
@@ -255,11 +268,13 @@ Future<int> compileModule(
     return 64;
   }
   final files = _Files(multiRoots.isEmpty ? const ['.'] : multiRoots);
-  final roots = await _packageRoots(packagesFile);
-  final closure = await _readExcluded(closureExcluded, roots);
+  final roots = await _packageRoots(packagesFile, multiRootPrefix);
+  final closure = await _readExcluded(closureExcluded, roots, multiRootPrefix);
   final vm = vmLibraries(
     jsonDecode(await File(librariesJson).readAsString())
         as Map<String, dynamic>,
+    platform: librariesPlatform,
+    extraLibraries: extraLibraries,
   );
   // Every kernel the closure indexes, by the key of each library it defines.
   final graph = <String, _Node>{};
@@ -278,11 +293,18 @@ Future<int> compileModule(
   };
   final own = <String>[
     for (final uri in sources)
-      if (!_definedBy(uri, graph, roots)) uri,
+      if (!_definedBy(uri, graph, roots, multiRootPrefix)) uri,
   ];
 
   if (noDrop) {
-    final entry = await _entrySources(sources, inherited, roots, files, vm);
+    final entry = await _entrySources(
+      sources,
+      inherited,
+      roots,
+      files,
+      vm,
+      multiRootPrefix,
+    );
     const dill = 'entry.dill';
     final outcome = await compiler.run([
       ...base,
@@ -308,7 +330,7 @@ Future<int> compileModule(
   final keys = <String, String>{};
   final plan = _Plan();
   for (final uri in own) {
-    final key = _keyOfUri(uri, roots);
+    final key = _keyOfUri(uri, roots, multiRootPrefix);
     if (key == null) continue;
     keys[uri] = key;
     plan.addOwn(key, uri);
@@ -351,7 +373,12 @@ Future<int> compileModule(
     if (failure == null) break;
     // The one retry: drop the own sources that failed, and their importers. The
     // components are then formed again from what remains.
-    final verdict = _attribute(failure.output, failedUris, roots);
+    final verdict = _attribute(
+      failure.output,
+      failedUris,
+      roots,
+      multiRootPrefix,
+    );
     if (retried ||
         verdict.unattributed ||
         verdict.outside ||
@@ -373,7 +400,7 @@ Future<int> compileModule(
 
   // Written even when nothing is excluded: the sidecar is a declared output. Its
   // `#` line is a count for the build log, and each excluded source is listed under
-  // its `package:` URI and its `org-dartlang-bazel` URI, with the reason.
+  // its `package:` URI and its multi-root URI, with the reason.
   final lines = StringBuffer()
     ..writeln(
       '# ${remaining.length} of ${own.length} sources compile; the others '
@@ -384,8 +411,8 @@ Future<int> compileModule(
     final reason = plan.reasonOf(key);
     if (key == null || reason == null) continue;
     lines.writeln('$uri\t$reason');
-    if (!uri.startsWith(_multiRootPrefix)) {
-      lines.writeln('$_multiRootPrefix$key\t$reason');
+    if (!uri.startsWith(multiRootPrefix)) {
+      lines.writeln('$multiRootPrefix$key\t$reason');
     }
   }
   await File(excludedPath).writeAsString(lines.toString());
@@ -690,8 +717,9 @@ bool _definedBy(
   String uri,
   Map<String, _Node> graph,
   Map<String, _PackageRoot> roots,
+  String multiRootPrefix,
 ) {
-  final key = _keyOfUri(uri, roots);
+  final key = _keyOfUri(uri, roots, multiRootPrefix);
   return key != null && graph.containsKey(key);
 }
 
@@ -716,13 +744,14 @@ Future<_EntrySources> _entrySources(
   Map<String, _PackageRoot> roots,
   _Files files,
   Set<String> vm,
+  String multiRootPrefix,
 ) async {
   final out = <String>[];
   final imports = <String>{};
   final seen = <String>{};
   final queue = Queue<String>();
   for (final uri in sources) {
-    final key = _keyOfUri(uri, roots);
+    final key = _keyOfUri(uri, roots, multiRootPrefix);
     if (key == null) {
       out.add(uri);
     } else {
@@ -789,10 +818,11 @@ _Verdict _attribute(
   String output,
   List<String> uris,
   Map<String, _PackageRoot> roots,
+  String multiRootPrefix,
 ) {
   final keyOfSpelling = <String, String>{};
   for (final uri in uris) {
-    final key = _keyOfUri(uri, roots);
+    final key = _keyOfUri(uri, roots, multiRootPrefix);
     if (key == null) continue;
     for (final spelling in _spellings(uri, key)) {
       keyOfSpelling.putIfAbsent(spelling, () => key);
@@ -803,7 +833,7 @@ _Verdict _attribute(
   var located = 0;
   for (final match in _errorLine.allMatches(output)) {
     located++;
-    final key = _lookup(keyOfSpelling, match.group(1)!);
+    final key = _lookup(keyOfSpelling, match.group(1)!, multiRootPrefix);
     if (key == null) {
       outside = true;
       continue;
@@ -822,10 +852,14 @@ _Verdict _attribute(
 }
 
 /// The key of the first spelling of `path` that `spellings` knows.
-String? _lookup(Map<String, String> spellings, String path) {
+String? _lookup(
+  Map<String, String> spellings,
+  String path,
+  String multiRootPrefix,
+) {
   for (final spelling in [
     path,
-    _stripPrefix(path),
+    _stripPrefix(path, multiRootPrefix),
     path.replaceFirst(_bazelOutPrefix, ''),
   ]) {
     if (spelling == null) continue;
@@ -841,10 +875,13 @@ Iterable<String> _spellings(String uri, String key) sync* {
   yield uri;
 }
 
-/// The path after `org-dartlang-bazel:///`, or null for any other URI.
-String? _stripPrefix(String uri) {
-  if (uri.startsWith(_multiRootPrefix)) {
-    return uri.substring(_multiRootPrefix.length);
+/// The path after `multiRootPrefix`, or null for any other URI.
+String? _stripPrefix(
+  String uri, [
+  String multiRootPrefix = _defaultMultiRootPrefix,
+]) {
+  if (uri.startsWith(multiRootPrefix)) {
+    return uri.substring(multiRootPrefix.length);
   }
   return null;
 }
@@ -852,8 +889,12 @@ String? _stripPrefix(String uri) {
 /// The key of a source or a library: the path it has under the multi-root
 /// directories, without the scheme. Null for a URI this module cannot name, such as
 /// a `dart:` library or a `package:` whose package it does not list.
-String? _keyOfUri(String uri, Map<String, _PackageRoot> roots) {
-  final stripped = _stripPrefix(uri);
+String? _keyOfUri(
+  String uri,
+  Map<String, _PackageRoot> roots, [
+  String multiRootPrefix = _defaultMultiRootPrefix,
+]) {
+  final stripped = _stripPrefix(uri, multiRootPrefix);
   if (stripped != null) return _normalize(stripped);
   if (!uri.startsWith('package:')) return null;
   final rest = uri.substring('package:'.length);
@@ -917,17 +958,18 @@ class _Files {
 }
 
 /// The excluded files the sidecars list, by key. Each maps to its `package:` URI
-/// when a sidecar gives one, and otherwise to its `org-dartlang-bazel` URI.
+/// when a sidecar gives one, and otherwise to its multi-root URI.
 Future<Map<String, String>> _readExcluded(
   List<String> paths,
   Map<String, _PackageRoot> roots,
+  String multiRootPrefix,
 ) async {
   final out = <String, String>{};
   for (final path in paths) {
     for (final line in await File(path).readAsLines()) {
       if (line.isEmpty || line.startsWith('#')) continue;
       final uri = line.split('\t').first;
-      final key = _keyOfUri(uri, roots);
+      final key = _keyOfUri(uri, roots, multiRootPrefix);
       if (key == null) continue;
       final known = out[key];
       if (known == null ||
@@ -939,14 +981,19 @@ Future<Map<String, String>> _readExcluded(
   return out;
 }
 
-/// The libraries of the `vm` platform in a `libraries.json`, by bare name. The
-/// platform's `include`s count too: `vm` inherits `vm_common`.
-Set<String> vmLibraries(Map<String, dynamic> json) {
+/// The libraries of `platform` in a `libraries.json`, plus `extraLibraries`, by bare
+/// name. The platform's `include`s count too (`vm` inherits `vm_common`), and a
+/// platform other than `vm` also inherits `vm` when `libraries.json` defines it.
+Set<String> vmLibraries(
+  Map<String, dynamic> json, {
+  String platform = 'vm',
+  Iterable<String> extraLibraries = const [],
+}) {
   final names = <String>{};
   final seen = <String>{};
-  void collect(String platform) {
-    if (!seen.add(platform)) return;
-    final entry = json[platform];
+  void collect(String target) {
+    if (!seen.add(target)) return;
+    final entry = json[target];
     if (entry is! Map) return;
     final libraries = entry['libraries'];
     if (libraries is Map) {
@@ -967,7 +1014,17 @@ Set<String> vmLibraries(Map<String, dynamic> json) {
     }
   }
 
-  collect('vm');
+  if (json.containsKey(platform)) {
+    collect(platform);
+  }
+  if (platform != 'vm' && json.containsKey('vm')) {
+    collect('vm');
+  }
+  for (final extra in extraLibraries) {
+    names.add(
+      extra.startsWith('dart:') ? extra.substring('dart:'.length) : extra,
+    );
+  }
   return names;
 }
 
@@ -1284,13 +1341,16 @@ class _Prologue {
 
 /// Each package's root, read from the `package_config.json` the module compiles
 /// against, so a `package:` source can be matched to the path a diagnostic names.
-Future<Map<String, _PackageRoot>> _packageRoots(String packagesFile) async {
+Future<Map<String, _PackageRoot>> _packageRoots(
+  String packagesFile,
+  String multiRootPrefix,
+) async {
   final config = jsonDecode(await File(packagesFile).readAsString()) as Map;
   final roots = <String, _PackageRoot>{};
   for (final entry in (config['packages'] as List).cast<Map>()) {
     var root = entry['rootUri'] as String;
-    if (root.startsWith(_multiRootPrefix)) {
-      root = root.substring(_multiRootPrefix.length);
+    if (root.startsWith(multiRootPrefix)) {
+      root = root.substring(multiRootPrefix.length);
     }
     if (root.isNotEmpty && !root.endsWith('/')) root = '$root/';
     final packageUri = (entry['packageUri'] as String?) ?? 'lib/';

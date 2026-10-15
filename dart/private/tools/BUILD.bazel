@@ -142,7 +142,7 @@ dart_binary(
     name = "kernel_link",
     compile_mode = "exe",
     main = "kernel_link.dart",
-    visibility = ["//dart:__subpackages__"],
+    visibility = ["//visibility:public"],
 )
 
 # Compiles one kernel module, excluding the sources that cannot compile for the VM.
@@ -152,7 +152,7 @@ dart_binary(
     name = "kernel_module",
     compile_mode = "exe",
     main = "kernel_module.dart",
-    visibility = ["//dart:__subpackages__"],
+    visibility = ["//visibility:public"],
 )
 
 # The planner's unit tests. They drive `compileModule` with a recording compiler, so
