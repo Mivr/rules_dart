@@ -461,6 +461,8 @@ def _dart_analyzer_summary_impl(target, ctx):
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
     sdk_summary = embedder_sdk_summary or ctx.file._sdk_summary
     args = ctx.actions.args()
+    args.use_param_file("@%s", use_always = True)
+    args.set_param_file_format("multiline")
     args.add("summarize")
     args.add("--sdk", sdk_root_path(dart_sdk_info))
     args.add("--packages", config)
@@ -477,6 +479,10 @@ def _dart_analyzer_summary_impl(target, ctx):
         outputs = [summary],
         mnemonic = "DartAnalyzerSummary",
         progress_message = "Summarizing Dart library %{label}",
+        execution_requirements = {
+            "supports-workers": "1",
+            "requires-worker-protocol": "proto",
+        },
     )
     return [DartAnalyzerSummaryInfo(
         summary = summary,

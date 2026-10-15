@@ -8,7 +8,13 @@
 // diagnostic in `dart analyze`'s format. Both run the pinned `package:analyzer`
 // rather than the SDK's copy, so the lint rules come from the vendored linter
 // under //third_party/dart_linter, which is the SDK's own set.
+//
+// Supports both one-shot execution (with `@flagfile` expansion) and Bazel's
+// `--persistent_worker` binary protobuf protocol over stdin/stdout.
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:analyzer/dart/analysis/analysis_context.dart';
 import 'package:analyzer/dart/analysis/analysis_options.dart';
@@ -18,6 +24,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/sdk/build_sdk_summary.dart';
 import 'package:analyzer/diagnostic/diagnostic.dart';
 import 'package:analyzer/error/error.dart';
+import 'package:analyzer/file_system/file_system.dart' as fs;
 import 'package:analyzer/file_system/physical_file_system.dart';
 import 'package:analyzer/source/error_processor.dart';
 import 'package:analyzer/source/line_info.dart';
@@ -40,25 +47,120 @@ const _usage = 64;
 /// A check that found problems, or a file that could not be analyzed.
 const _failed = 1;
 
-Future<void> main(List<String> args) async {
-  // The lint rules `dart analyze` runs, registered once, before any analysis
-  // context reads `linter:` from an options file.
-  registerLintRules();
-  if (args.isEmpty) {
-    exit(_usageError('a mode is required: `summarize` or `analyze`'));
+bool _lintRulesRegistered = false;
+
+/// Registers the vendored lint rules once per process.
+void _ensureLintRulesRegistered() {
+  if (!_lintRulesRegistered) {
+    registerLintRules();
+    _lintRulesRegistered = true;
   }
-  final parsed = _Args.parse(args.sublist(1));
-  final code = switch (args.first) {
-    'sdk' => await _sdk(parsed),
-    'summarize' => await _summarize(parsed),
-    'analyze' => await _analyze(parsed),
-    _ => _usageError('unknown mode `${args.first}`'),
-  };
+}
+
+Future<void> main(List<String> rawArgs) async {
+  final args = _expandParamFiles(rawArgs);
+  if (args.contains('--persistent_worker')) {
+    await _runPersistentWorker();
+    exit(0);
+  }
+  final code = await _runSingleRequest(
+    args,
+    outSink: stdout,
+    errSink: stderr,
+    resourceProvider: PhysicalResourceProvider.INSTANCE,
+  );
   exit(code);
 }
 
-int _usageError(String message) {
-  stderr.writeln('analyzer_summary: $message');
+/// Runs the Bazel persistent worker loop reading `WorkRequest` protobuf frames
+/// from `stdin` and writing `WorkResponse` protobuf frames to `stdout`.
+Future<void> _runPersistentWorker() async {
+  _ensureLintRulesRegistered();
+  final disableCache = Platform.environment['ANALYZER_SUMMARY_NO_CACHE'] == '1';
+  final summaryCache = _SummaryByteCache();
+
+  await for (final bytes in _Frames(stdin)) {
+    final request = _WorkRequest.read(bytes);
+    if (request.cancel) {
+      continue;
+    }
+    final output = StringBuffer();
+    var exitCode = _failed;
+    try {
+      final expandedArgs = _expandParamFiles(request.arguments);
+      final fs.ResourceProvider provider;
+      if (disableCache) {
+        provider = PhysicalResourceProvider.INSTANCE;
+      } else {
+        summaryCache.beginRequest(request.inputs);
+        provider = _SummaryCachingResourceProvider(
+          PhysicalResourceProvider.INSTANCE,
+          summaryCache,
+        );
+      }
+      exitCode = await _runSingleRequest(
+        expandedArgs,
+        outSink: output,
+        errSink: output,
+        resourceProvider: provider,
+      );
+    } on Object catch (e, st) {
+      output
+        ..writeln('analyzer_summary: unhandled exception: $e')
+        ..writeln(st);
+      exitCode = _failed;
+    }
+    stdout.add(
+      _WorkResponse(
+        exitCode: exitCode,
+        output: output.toString(),
+        requestId: request.requestId,
+      ).write(),
+    );
+    await stdout.flush();
+  }
+}
+
+/// Executes a single `sdk`, `summarize`, or `analyze` invocation.
+Future<int> _runSingleRequest(
+  List<String> args, {
+  required StringSink outSink,
+  required StringSink errSink,
+  required fs.ResourceProvider resourceProvider,
+}) async {
+  _ensureLintRulesRegistered();
+  if (args.isEmpty) {
+    return _usageError(errSink, 'a mode is required: `summarize` or `analyze`');
+  }
+  final _Args parsed;
+  try {
+    parsed = _Args.parse(args.sublist(1));
+  } on _UsageException catch (e) {
+    return _usageError(errSink, e.message);
+  }
+  try {
+    return switch (args.first) {
+      'sdk' => await _sdk(parsed),
+      'summarize' => await _summarize(
+        parsed,
+        errSink: errSink,
+        resourceProvider: resourceProvider,
+      ),
+      'analyze' => await _analyze(
+        parsed,
+        outSink: outSink,
+        errSink: errSink,
+        resourceProvider: resourceProvider,
+      ),
+      _ => _usageError(errSink, 'unknown mode `${args.first}`'),
+    };
+  } on _UsageException catch (e) {
+    return _usageError(errSink, e.message);
+  }
+}
+
+int _usageError(StringSink errSink, String message) {
+  errSink.writeln('analyzer_summary: $message');
   return _usage;
 }
 
@@ -74,8 +176,10 @@ Future<int> _sdk(_Args args) async {
   final embedder = args.all('embedder-yaml');
   final bytes = await buildSdkSummary(
     resourceProvider: PhysicalResourceProvider.INSTANCE,
-    sdkPath: p.absolute(args.single('sdk')),
-    embedderYamlPath: embedder.isEmpty ? null : p.absolute(embedder.single),
+    sdkPath: p.normalize(p.absolute(args.single('sdk'))),
+    embedderYamlPath: embedder.isEmpty
+        ? null
+        : p.normalize(p.absolute(embedder.single)),
   );
   File(args.single('out')).writeAsBytesSync(bytes);
   return 0;
@@ -87,11 +191,16 @@ Future<int> _sdk(_Args args) async {
 /// the i-th `package:` URI. A `part` file is staged with the others, so its
 /// library resolves it, but it is not a library and has no URI in the bundle:
 /// naming it as one fails the bundle with "Missing library".
-Future<int> _summarize(_Args args) async {
+Future<int> _summarize(
+  _Args args, {
+  required StringSink errSink,
+  required fs.ResourceProvider resourceProvider,
+}) async {
   final sources = args.all('source');
   final uris = args.all('uri');
   if (sources.isEmpty || sources.length != uris.length) {
     return _usageError(
+      errSink,
       'summarize needs a --source for each --uri, and at least one of each',
     );
   }
@@ -100,20 +209,22 @@ Future<int> _summarize(_Args args) async {
       if (!_isPart(sources[i])) uris[i],
   ];
   final collection = AnalysisContextCollectionImpl(
-    includedPaths: [for (final s in sources) p.absolute(s)],
-    sdkPath: p.absolute(args.single('sdk')),
-    sdkSummaryPath: p.absolute(args.single('sdk-summary')),
-    packageConfigFile: p.absolute(args.single('packages')),
-    librarySummaryPaths: [for (final s in args.all('summary')) p.absolute(s)],
+    resourceProvider: resourceProvider,
+    includedPaths: [p.normalize(p.absolute(sources.first))],
+    sdkPath: p.normalize(p.absolute(args.single('sdk'))),
+    sdkSummaryPath: p.normalize(p.absolute(args.single('sdk-summary'))),
+    packageConfigFile: p.normalize(p.absolute(args.single('packages'))),
+    librarySummaryPaths: [
+      for (final s in args.all('summary')) p.normalize(p.absolute(s)),
+    ],
   );
   final driver = collection.contexts.single.driver;
   final bytes = await driver.buildPackageBundle(
     uriList: [for (final u in libraryUris) Uri.parse(u)],
   );
-  // The collection is not disposed. On analyzer 13.3.0, `dispose` after a
-  // summary build threw "Expected to link dart:core and dart:async first". On
-  // 14.1.0 it does not, in the summary-then-consumer shape this action runs, but
-  // the process exits straight after, so there is nothing to release.
+  // Do NOT call `collection.dispose()`. On analyzer 13.3.0, `dispose` after a
+  // summary build threw "Expected to link dart:core and dart:async first".
+  // Letting `collection` go out of scope allows GC to reclaim it cleanly.
   File(args.single('out')).writeAsBytesSync(bytes);
   return 0;
 }
@@ -129,16 +240,24 @@ bool _isPart(String path) {
 }
 
 /// Checks a staged project's own files, and writes the stamp if they pass.
-Future<int> _analyze(_Args args) async {
-  final project = p.absolute(args.single('project'));
+Future<int> _analyze(
+  _Args args, {
+  required StringSink outSink,
+  required StringSink errSink,
+  required fs.ResourceProvider resourceProvider,
+}) async {
+  final project = p.normalize(p.absolute(args.single('project')));
   final stamp = args.single('stamp');
   final fatalInfos = args.flag('fatal-infos');
   final collection = AnalysisContextCollectionImpl(
+    resourceProvider: resourceProvider,
     includedPaths: [project],
-    sdkPath: p.absolute(args.single('sdk')),
-    sdkSummaryPath: p.absolute(args.single('sdk-summary')),
-    packageConfigFile: p.join(project, _packageConfig),
-    librarySummaryPaths: [for (final s in args.all('summary')) p.absolute(s)],
+    sdkPath: p.normalize(p.absolute(args.single('sdk'))),
+    sdkSummaryPath: p.normalize(p.absolute(args.single('sdk-summary'))),
+    packageConfigFile: p.normalize(p.join(project, _packageConfig)),
+    librarySummaryPaths: [
+      for (final s in args.all('summary')) p.normalize(p.absolute(s)),
+    ],
   );
   final context = collection.contexts.single;
   final driver = context.driver;
@@ -154,7 +273,7 @@ Future<int> _analyze(_Args args) async {
     }
     final result = await driver.getErrors(path);
     if (result is! ErrorsResult) {
-      stderr.writeln('analyzer_summary: cannot analyze $path');
+      errSink.writeln('analyzer_summary: cannot analyze $path');
       return _failed;
     }
     for (final d in result.diagnostics) {
@@ -170,12 +289,12 @@ Future<int> _analyze(_Args args) async {
       if (f.level != null) f,
   ];
   if (shown.isNotEmpty) {
-    stdout.writeln();
+    outSink.writeln();
     for (final f in shown) {
-      stdout.writeln(f.text);
+      outSink.writeln(f.text);
     }
-    stdout.writeln();
-    stdout.writeln(
+    outSink.writeln();
+    outSink.writeln(
       shown.length == 1 ? '1 issue found.' : '${shown.length} issues found.',
     );
   }
@@ -339,6 +458,11 @@ final class _Finding implements Comparable<_Finding> {
   };
 }
 
+final class _UsageException implements Exception {
+  const _UsageException(this.message);
+  final String message;
+}
+
 /// Parsed command-line arguments: repeatable `--name value` pairs, and bare
 /// `--flag`s.
 final class _Args {
@@ -350,8 +474,7 @@ final class _Args {
     for (var i = 0; i < args.length; i++) {
       final arg = args[i];
       if (!arg.startsWith('--')) {
-        stderr.writeln('analyzer_summary: unexpected argument `$arg`');
-        exit(_usage);
+        throw _UsageException('unexpected argument `$arg`');
       }
       final name = arg.substring(2);
       if (name == 'fatal-infos') {
@@ -359,8 +482,7 @@ final class _Args {
         continue;
       }
       if (i + 1 >= args.length) {
-        stderr.writeln('analyzer_summary: `$arg` needs a value');
-        exit(_usage);
+        throw _UsageException('`$arg` needs a value');
       }
       values.putIfAbsent(name, () => []).add(args[++i]);
     }
@@ -377,9 +499,443 @@ final class _Args {
   String single(String name) {
     final values = all(name);
     if (values.length != 1) {
-      stderr.writeln('analyzer_summary: `--$name` is required exactly once');
-      exit(_usage);
+      throw _UsageException('`--$name` is required exactly once');
     }
     return values.single;
   }
+}
+
+/// Expands `@param_file` arguments (multiline format, one argument per line).
+List<String> _expandParamFiles(List<String> args) {
+  final expanded = <String>[];
+  for (final arg in args) {
+    if (arg.startsWith('@') && arg.length > 1) {
+      final file = File(arg.substring(1));
+      if (file.existsSync()) {
+        for (final line in file.readAsLinesSync()) {
+          if (line.isNotEmpty) {
+            expanded.add(line);
+          }
+        }
+        continue;
+      }
+    }
+    expanded.add(arg);
+  }
+  return expanded;
+}
+
+// ---------------------------------------------------------------------------
+// Per-worker `.sum` byte cache and ResourceProvider wrapper.
+// ---------------------------------------------------------------------------
+
+final class _CachedSumEntry {
+  _CachedSumEntry({
+    required this.bytes,
+    required this.digest,
+    required this.size,
+    required this.modifiedMicros,
+  });
+
+  final Uint8List bytes;
+  final Uint8List? digest;
+  final int size;
+  final int modifiedMicros;
+}
+
+/// Caches `.sum` bundle bytes (`Uint8List`) across worker requests, keyed by
+/// normalized absolute path and validated via `WorkRequest.inputs` digests (or
+/// file size + mtime fallback when no digest is provided).
+///
+/// Never caches `.dart`, `.yaml`, or `.json` files: those always go directly to
+/// `PhysicalResourceProvider.INSTANCE`.
+final class _SummaryByteCache {
+  static const int _maxCacheBytes = 256 * 1024 * 1024;
+
+  // LinkedHashMap preserves insertion order for simple LRU eviction.
+  final Map<String, _CachedSumEntry> _entries = <String, _CachedSumEntry>{};
+  final Map<String, Uint8List> _currentInputDigests = <String, Uint8List>{};
+  int _totalBytes = 0;
+
+  void beginRequest(Map<String, Uint8List> requestInputs) {
+    _currentInputDigests.clear();
+    for (final entry in requestInputs.entries) {
+      if (entry.key.endsWith('.sum')) {
+        _currentInputDigests[p.normalize(p.absolute(entry.key))] = entry.value;
+      }
+    }
+  }
+
+  Uint8List readBytes(fs.File delegate) {
+    final path = delegate.path;
+    final reqDigest = _currentInputDigests[path];
+    final existing = _entries.remove(path);
+
+    if (existing != null) {
+      if (reqDigest != null &&
+          existing.digest != null &&
+          _bytesEqual(reqDigest, existing.digest!)) {
+        // Re-insert as most-recently-used.
+        _entries[path] = existing;
+        return existing.bytes;
+      }
+      // Fallback: check file stat if digest wasn't in WorkRequest.inputs.
+      if (reqDigest == null) {
+        final stat = File(path).statSync();
+        if (stat.size == existing.size &&
+            stat.modified.microsecondsSinceEpoch == existing.modifiedMicros) {
+          _entries[path] = existing;
+          return existing.bytes;
+        }
+      }
+      _totalBytes -= existing.bytes.length;
+    }
+
+    final bytes = delegate.readAsBytesSync();
+    final stat = File(path).statSync();
+    while (_totalBytes + bytes.length > _maxCacheBytes && _entries.isNotEmpty) {
+      final oldestKey = _entries.keys.first;
+      final removed = _entries.remove(oldestKey)!;
+      _totalBytes -= removed.bytes.length;
+    }
+    _entries[path] = _CachedSumEntry(
+      bytes: bytes,
+      digest: reqDigest,
+      size: stat.size,
+      modifiedMicros: stat.modified.microsecondsSinceEpoch,
+    );
+    _totalBytes += bytes.length;
+    return bytes;
+  }
+
+  static bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+}
+
+/// Wraps [PhysicalResourceProvider.INSTANCE] to intercept `readAsBytesSync()`
+/// on `.sum` files only. All `.dart` sources, `analysis_options.yaml`, and
+/// `package_config.json` files return the underlying physical `fs.File`
+/// directly with zero cross-request caching.
+final class _SummaryCachingResourceProvider implements fs.ResourceProvider {
+  const _SummaryCachingResourceProvider(this._delegate, this._cache);
+
+  final fs.ResourceProvider _delegate;
+  final _SummaryByteCache _cache;
+
+  @override
+  p.Context get pathContext => _delegate.pathContext;
+
+  @override
+  fs.File getFile(String path) {
+    final file = _delegate.getFile(path);
+    if (path.endsWith('.sum')) {
+      return _CachedSummaryFile(file, _cache);
+    }
+    return file;
+  }
+
+  @override
+  fs.Folder getFolder(String path) => _delegate.getFolder(path);
+
+  @override
+  fs.Link getLink(String path) => _delegate.getLink(path);
+
+  @override
+  fs.Resource getResource(String path) => _delegate.getResource(path);
+
+  @override
+  fs.Folder? getStateLocation(String pluginId) =>
+      _delegate.getStateLocation(pluginId);
+}
+
+final class _CachedSummaryFile implements fs.File {
+  const _CachedSummaryFile(this._delegate, this._cache);
+
+  final fs.File _delegate;
+  final _SummaryByteCache _cache;
+
+  @override
+  Uint8List readAsBytesSync() => _cache.readBytes(_delegate);
+
+  @override
+  bool get exists => _delegate.exists;
+
+  @override
+  int get lengthSync => _delegate.lengthSync;
+
+  @override
+  int get modificationStamp => _delegate.modificationStamp;
+
+  @override
+  fs.Folder get parent => _delegate.parent;
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  fs.ResourceProvider get provider => _delegate.provider;
+
+  @override
+  String get shortName => _delegate.shortName;
+
+  @override
+  fs.File copyTo(fs.Folder parentFolder) => _delegate.copyTo(parentFolder);
+
+  @override
+  void delete() => _delegate.delete();
+
+  @override
+  bool isOrContains(String path) => _delegate.isOrContains(path);
+
+  @override
+  String readAsStringSync() => _delegate.readAsStringSync();
+
+  @override
+  fs.File renameSync(String newPath) => _delegate.renameSync(newPath);
+
+  @override
+  fs.Resource resolveSymbolicLinksSync() =>
+      _delegate.resolveSymbolicLinksSync();
+
+  @override
+  Uri toUri() => _delegate.toUri();
+
+  @override
+  fs.ResourceWatcher watch() => _delegate.watch();
+
+  @override
+  void writeAsBytesSync(List<int> bytes) => _delegate.writeAsBytesSync(bytes);
+
+  @override
+  void writeAsStringSync(String content) =>
+      _delegate.writeAsStringSync(content);
+
+  @override
+  bool operator ==(Object other) => other is fs.File && path == other.path;
+
+  @override
+  int get hashCode => path.hashCode;
+}
+
+// ---------------------------------------------------------------------------
+// Bazel worker protocol (`blaze.worker.WorkRequest` / `WorkResponse`)
+// ---------------------------------------------------------------------------
+
+final class _WorkRequest {
+  const _WorkRequest({
+    required this.arguments,
+    required this.inputs,
+    required this.requestId,
+    required this.cancel,
+  });
+
+  factory _WorkRequest.read(Uint8List bytes) {
+    final arguments = <String>[];
+    final inputs = <String, Uint8List>{};
+    var requestId = 0;
+    var cancel = false;
+    final r = _Reader(bytes);
+    while (!r.isDone) {
+      final tag = r.varint();
+      switch (tag >> 3) {
+        case 1:
+          arguments.add(r.string());
+        case 2:
+          final nested = r.submessage();
+          var path = '';
+          var digest = Uint8List(0);
+          while (!nested.isDone) {
+            final inputTag = nested.varint();
+            switch (inputTag >> 3) {
+              case 1:
+                path = nested.string();
+              case 2:
+                digest = nested.bytes();
+              default:
+                nested.skip(inputTag & 7);
+            }
+          }
+          if (path.isNotEmpty) {
+            inputs[path] = digest;
+          }
+        case 3:
+          requestId = r.varint();
+        case 4:
+          cancel = r.varint() != 0;
+        default:
+          r.skip(tag & 7);
+      }
+    }
+    return _WorkRequest(
+      arguments: arguments,
+      inputs: inputs,
+      requestId: requestId,
+      cancel: cancel,
+    );
+  }
+
+  final List<String> arguments;
+  final Map<String, Uint8List> inputs;
+  final int requestId;
+  final bool cancel;
+}
+
+final class _WorkResponse {
+  const _WorkResponse({
+    required this.exitCode,
+    required this.output,
+    required this.requestId,
+  });
+
+  final int exitCode;
+  final String output;
+  final int requestId;
+
+  Uint8List write() {
+    final body = _Writer();
+    if (exitCode != 0) {
+      body
+        ..varint((1 << 3) | 0)
+        ..varint(exitCode);
+    }
+    if (output.isNotEmpty) {
+      final utf8Bytes = utf8.encode(output);
+      body
+        ..varint((2 << 3) | 2)
+        ..varint(utf8Bytes.length)
+        ..raw(utf8Bytes);
+    }
+    if (requestId != 0) {
+      body
+        ..varint((3 << 3) | 0)
+        ..varint(requestId);
+    }
+    final payload = body.takeBytes();
+    final frame = _Writer()
+      ..varint(payload.length)
+      ..raw(payload);
+    return frame.takeBytes();
+  }
+}
+
+final class _Frames extends Stream<Uint8List> {
+  _Frames(this._source);
+
+  final Stream<List<int>> _source;
+
+  @override
+  StreamSubscription<Uint8List> listen(
+    void Function(Uint8List)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    final controller = StreamController<Uint8List>();
+    var buf = Uint8List(0);
+    late final StreamSubscription<List<int>> sub;
+    sub = _source.listen(
+      (chunk) {
+        final merged = Uint8List(buf.length + chunk.length);
+        merged.setRange(0, buf.length, buf);
+        merged.setRange(buf.length, merged.length, chunk);
+        buf = merged;
+        while (true) {
+          var len = 0;
+          var shift = 0;
+          var pos = 0;
+          while (true) {
+            if (pos >= buf.length) return;
+            final b = buf[pos++];
+            len |= (b & 0x7f) << shift;
+            if ((b & 0x80) == 0) break;
+            shift += 7;
+          }
+          if (buf.length < pos + len) return;
+          controller.add(Uint8List.sublistView(buf, pos, pos + len));
+          buf = Uint8List.sublistView(buf, pos + len);
+        }
+      },
+      onError: controller.addError,
+      onDone: controller.close,
+      cancelOnError: cancelOnError,
+    );
+    controller
+      ..onPause = sub.pause
+      ..onResume = sub.resume
+      ..onCancel = sub.cancel;
+    return controller.stream.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+  }
+}
+
+final class _Reader {
+  _Reader(this._buf);
+
+  final Uint8List _buf;
+  int _pos = 0;
+
+  bool get isDone => _pos >= _buf.length;
+
+  int varint() {
+    var result = 0;
+    var shift = 0;
+    while (true) {
+      final b = _buf[_pos++];
+      result |= (b & 0x7f) << shift;
+      if ((b & 0x80) == 0) return result;
+      shift += 7;
+    }
+  }
+
+  Uint8List bytes() {
+    final len = varint();
+    final slice = Uint8List.sublistView(_buf, _pos, _pos + len);
+    _pos += len;
+    return slice;
+  }
+
+  String string() => utf8.decode(bytes());
+
+  _Reader submessage() => _Reader(bytes());
+
+  void skip(int wireType) {
+    switch (wireType) {
+      case 0:
+        varint();
+      case 1:
+        _pos += 8;
+      case 2:
+        _pos += varint();
+      case 5:
+        _pos += 4;
+      default:
+        throw FormatException('unsupported wire type: $wireType');
+    }
+  }
+}
+
+final class _Writer {
+  final _buf = BytesBuilder(copy: false);
+
+  void varint(int value) {
+    var v = value;
+    while (v < 0 || v >= 0x80) {
+      _buf.addByte((v & 0x7f) | 0x80);
+      v = v >>> 7;
+    }
+    _buf.addByte(v);
+  }
+
+  void raw(List<int> bytes) => _buf.add(bytes);
+
+  Uint8List takeBytes() => _buf.takeBytes();
 }

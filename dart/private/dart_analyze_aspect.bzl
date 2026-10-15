@@ -299,6 +299,8 @@ def _analyze_summaries(ctx, name, staged, summaries, sdk_summary, sdk_inputs):
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
     stamp = ctx.actions.declare_file(name + ".analyzed")
     args = ctx.actions.args()
+    args.use_param_file("@%s", use_always = True)
+    args.set_param_file_format("multiline")
     args.add("analyze")
     args.add("--sdk", sdk_root_path(dart_sdk_info))
     args.add("--project", staged.proj_path)
@@ -313,6 +315,10 @@ def _analyze_summaries(ctx, name, staged, summaries, sdk_summary, sdk_inputs):
         outputs = [stamp],
         mnemonic = "DartAnalyze",
         progress_message = "Analyzing Dart sources of %{label} against summaries",
+        execution_requirements = {
+            "supports-workers": "1",
+            "requires-worker-protocol": "proto",
+        },
     )
     return stamp
 
