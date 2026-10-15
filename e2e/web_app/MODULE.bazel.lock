@@ -249,7 +249,7 @@
     },
     "@@rules_dart+//dart/pub:extensions.bzl%pub": {
       "general": {
-        "bzlTransitiveDigest": "IQmTUWP2sEOtQJyV5YaJnLtfD6u9uBhV07RyIB7bF5w=",
+        "bzlTransitiveDigest": "57hbcGJjgzTzYGGmCNfIQ/+yUxGAQBx4f2yy6rJqJzg=",
         "usagesDigest": "aZ7z3cFWvK5/JUFN3C6bK0Pu1J7bkt7v6TQbR6ACMLg=",
         "recordedInputs": [
           "FILE:@@//pubspec.lock feb2b45b16ac32e45bd2d7b0426aafdbf5fdc0aa418ea70410f1bfe3581a3666",
@@ -373,6 +373,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -484,6 +487,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -597,6 +603,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -708,6 +717,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -821,6 +833,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -932,6 +947,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -1045,6 +1063,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -1156,6 +1177,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -1269,6 +1293,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -1380,6 +1407,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -1493,6 +1523,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -1604,6 +1637,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -1717,6 +1753,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -1828,6 +1867,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -1941,6 +1983,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -2052,6 +2097,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -2165,6 +2213,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -2276,6 +2327,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -2389,6 +2443,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -2500,6 +2557,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -2613,6 +2673,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -2724,6 +2787,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -2837,6 +2903,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -2948,6 +3017,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -3061,6 +3133,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -3172,6 +3247,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -3285,6 +3363,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -3396,6 +3477,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -3509,6 +3593,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -3620,6 +3707,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -3733,6 +3823,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -3844,6 +3937,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -3957,6 +4053,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -4068,6 +4167,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -4181,6 +4283,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -4292,6 +4397,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -4405,6 +4513,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -4516,6 +4627,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -4629,6 +4743,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -4740,6 +4857,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -4853,6 +4973,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -4964,6 +5087,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -5077,6 +5203,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -5188,6 +5317,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -5301,6 +5433,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -5412,6 +5547,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -5525,6 +5663,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -5636,6 +5777,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -5749,6 +5893,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -5860,6 +6007,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -5973,6 +6123,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -6084,6 +6237,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -6197,6 +6353,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -6308,6 +6467,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -6421,6 +6583,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -6532,6 +6697,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -6645,6 +6813,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -6756,6 +6927,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -6869,6 +7043,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -6980,6 +7157,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -7093,6 +7273,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -7204,6 +7387,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -7317,6 +7503,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -7428,6 +7617,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -7541,6 +7733,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -7652,6 +7847,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -7765,6 +7963,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -7876,6 +8077,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -7989,6 +8193,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -8100,6 +8307,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -8213,6 +8423,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -8324,6 +8537,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -8437,6 +8653,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -8548,6 +8767,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -8661,6 +8883,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -8772,6 +8997,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -8885,6 +9113,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -8996,6 +9227,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [
                 "@rules_dart//dart/ext/sqlite3:code_asset"
@@ -9111,6 +9345,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -9222,6 +9459,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -9335,6 +9575,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -9446,6 +9689,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -9559,6 +9805,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -9670,6 +9919,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -9783,6 +10035,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -9894,6 +10149,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -10007,6 +10265,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -10118,6 +10379,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -10231,6 +10495,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -10342,6 +10609,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -10455,6 +10725,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -10566,6 +10839,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -10679,6 +10955,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -10790,6 +11069,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -10903,6 +11185,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -11014,6 +11299,9 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
+              ],
+              "explicit_packages": [
+                "very_good_analysis"
               ],
               "code_assets": [],
               "ignore_hook": false
@@ -11127,6 +11415,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -11239,6 +11530,9 @@
                 "xxh3",
                 "yaml"
               ],
+              "explicit_packages": [
+                "very_good_analysis"
+              ],
               "code_assets": [],
               "ignore_hook": false
             }
@@ -11250,7 +11544,8 @@
               "spoke_prefix": "dart_pub",
               "packages": [
                 "characters"
-              ]
+              ],
+              "explicit_packages": []
             }
           },
           "ext_pub_deps": {
@@ -11356,7 +11651,8 @@
                 "webkit_inspection_protocol",
                 "xxh3",
                 "yaml"
-              ]
+              ],
+              "explicit_packages": []
             }
           }
         },

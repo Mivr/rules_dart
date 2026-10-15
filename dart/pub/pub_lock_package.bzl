@@ -58,15 +58,20 @@ def _pub_lock_package_impl(ctx):
     if pubspec_path.exists:
         pubspec_content = ctx.read(pubspec_path)
         all_deps = parse_pubspec_deps(pubspec_content)
-        available = {p: True for p in ctx.attr.lock_packages}
+        available = {p: True for p in ctx.attr.lock_packages + ctx.attr.explicit_packages}
         bazel_deps = sorted([d for d in all_deps if d in available])
         language_version = _derive_language_version(
             parse_pubspec_sdk_constraint(pubspec_content),
         )
 
-    # Build full label strings for sibling spoke repos.
+    # Build full label strings for sibling repos: a dependency declared with
+    # `pub.package()` is that explicit repo, every other one is its spoke.
+    explicit = {p: True for p in ctx.attr.explicit_packages}
     dep_labels = [
-        "@{hub}__{dep}//:{dep}".format(hub = ctx.attr.hub_name, dep = dep)
+        "@{repo}//:{dep}".format(
+            repo = dep if dep in explicit else "{hub}__{dep}".format(hub = ctx.attr.hub_name, dep = dep),
+            dep = dep,
+        )
         for dep in bazel_deps
     ]
 
@@ -119,6 +124,12 @@ pub_lock_package = repository_rule(
         ),
         "lock_packages": attr.string_list(
             doc = "All hosted package names in the lock file (for dep filtering).",
+            default = [],
+        ),
+        "explicit_packages": attr.string_list(
+            doc = "Every name declared with `pub.package()`. A dependency on one of these " +
+                  "points at that explicit repository, not a spoke, and is kept even when " +
+                  "no lock file lists it.",
             default = [],
         ),
         "ignore_hook": attr.bool(

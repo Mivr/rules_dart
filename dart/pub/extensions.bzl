@@ -130,10 +130,13 @@ def _pub_impl(ctx):
                     skipped_by_source.setdefault(source, []).append(name)
                     continue
 
-                if name in explicit:
-                    continue  # pub.package() wins
-
+                # The hub aliases every package its lock names, explicit or not:
+                # an explicit package stands in for the name everywhere, so a
+                # hub that lists it points at the explicit repo, not a spoke.
                 hub_packages[hub_name][name] = True
+
+                if name in explicit:
+                    continue  # pub.package() wins: no version to reconcile, no spoke
 
                 desc = info.get("description", {})
                 url = desc.get("url", "https://pub.dev")
@@ -226,6 +229,7 @@ def _pub_impl(ctx):
 
     # Create shared spoke repos
     all_package_names = sorted(resolved.keys())
+    explicit_package_names = sorted(explicit.keys())
     for name, pkg in resolved.items():
         pub_lock_package(
             name = _SPOKE_PREFIX + "__" + name,
@@ -235,6 +239,9 @@ def _pub_impl(ctx):
             base_url = pkg.url,
             hub_name = _SPOKE_PREFIX,
             lock_packages = all_package_names,
+            # A spoke whose pubspec depends on an explicit package depends on
+            # that package's repo, which is what every hub aliases it to.
+            explicit_packages = explicit_package_names,
             code_assets = curated_code_assets(name, pkg.version),
             ignore_hook = name in ignore_hooks,
         )
@@ -242,11 +249,13 @@ def _pub_impl(ctx):
     # Create per-from_lock hub repos
     all_hub_names = []
     for hub_name, packages in hub_packages.items():
+        package_names = sorted(packages)
         pub_lock_hub(
             name = hub_name,
             hub_name = hub_name,
             spoke_prefix = _SPOKE_PREFIX,
-            packages = sorted(packages),
+            packages = package_names,
+            explicit_packages = [n for n in package_names if n in explicit],
         )
         all_hub_names.append(hub_name)
 
