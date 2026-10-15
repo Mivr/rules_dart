@@ -35,3 +35,32 @@ Two checks were added to that list after something slipped through:
   See `decisions.md`, 2026-10-14, "lockfile regression".
 - **Reproducibility**: every new or changed build output must be byte-identical
   across two clean builds. See `findings.md`, "Reproducibility audit".
+
+## Status: concluded 2026-10-15, released as v0.8.0
+
+The review's changes are on `main` and tagged `v0.8.0` on `Mivr/rules_dart` (the
+0.7.2 release is exactly `3b0470c`, the review's baseline, so v0.8.0 is this
+review). The tag is on the fork only: this environment cannot reach
+`aran/rules_dart`, the BCR or pub.dev, so publishing means running the release
+skill (`.claude/skills/release/SKILL.md`) from `aran/rules_dart` on a machine
+with Go, signing and the BCR token.
+
+Verified for the release (Linux, Bazel 9.2.0, Dart 3.13.5): every CI test
+folder except `e2e/gazelle`, the root's 329 tests outside `//dev` and
+`//gazelle`, the expected-failure job's steps, the `format-hermeticity` and
+`dbg-mode` jobs, the prek hooks, `mod tidy`, and `e2e/ext_exemplar`'s build
+without its Gazelle targets.
+
+Known issues (not verifiable here; fix on a machine with Go):
+
+- Go/Gazelle: `//gazelle/...`, `//dev/...` and `e2e/gazelle` were not built or
+  tested: the Go SDK (go.dev, dl.google.com) is unreachable from the cloud
+  environment. `e2e/gazelle/MODULE.bazel.lock` has a stale `pub` extension
+  entry (since before 0.7.2), and the root and `e2e/ext_exemplar` locks were
+  refreshed without re-evaluating Gazelle's `go_deps` extension. Refresh the locks
+  (the refresh-locks skill, `tool/refresh_locks.dart`) and run `bazel test //...` in the root and `e2e/gazelle` with Go available.
+- sqlite: `//dart/ext/sqlite3` and the drift targets were not built (sqlite.org
+  is unreachable), and `e2e/ext_exemplar`'s tests were not run.
+- Platforms: macOS and Windows were not run.
+
+Open follow-ups are the queued items in `plan.md` (#16-#20, #17b).

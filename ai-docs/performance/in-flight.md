@@ -1,9 +1,8 @@
 # Work in flight
 
-Snapshot as of 2026-10-14. None of this is on `main`. It lives in git worktrees
-local to the reviewing agent's session and lands on `main` one item at a time,
-after verification. Until then, treat the designs here as likely, not final:
-build on `main`, not on this.
+Snapshot as of 2026-10-15. Nothing is in flight: the review concluded with
+v0.8.0 (see `README.md`). Each section below records where an item landed.
+Follow-ups are the queued items in `plan.md`.
 
 ## Modular kernel compilation
 
@@ -39,4 +38,9 @@ runs (`harness/README.md`).
 ## Drop `bazel_lib` and `yaml.bzl` (plans #11, #15)
 
 Landed on `main` as `84c8767` and `5387726`; see `plan.md` and
+`for-rules-flutter.md`.
+
+## Summaries on by default, and the pub fix it exposed
+
+Landed on `main` as `8f3b716` (pub) and `17fab99` (summaries); see `plan.md` and
 `for-rules-flutter.md`.

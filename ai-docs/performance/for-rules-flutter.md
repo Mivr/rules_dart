@@ -208,8 +208,7 @@ reproducible. Tell us which you prefer.
 
 ### D. A version to depend on: user
 
-Releases are the user's call. For testing now, pin `main` at `8e2e855` or later (the
-plan #14 fix); no flag is needed.
+Releases are the user's call. For testing, use tag `v0.8.0` on `Mivr/rules_dart` (see `README.md`, Status).
 
 ### E. A macro declaring an SDK toolchain over a directory: accepted (plan #18)
 
@@ -293,5 +292,31 @@ note any change here first.
   is `dart/pub/private/yaml_subset.bzl`.
 - Every `MODULE.bazel.lock` in rules_dart was refreshed. A downstream root
   module that commits its lock refreshes it when it bumps rules_dart.
+
+### `//dart:analyzer_summaries` is on by default (`17fab99`)
+
+- A Flutter target (a `sky_engine` package or any `lib/_embedder.yaml` in its
+  closure) is analyzed from source automatically; nothing to set. Plan #17b
+  would let it use summaries.
+- Summary mode is off on a Dart SDK newer than `ANALYZER_MAX_LANGUAGE_VERSION`
+  (`3.13`, in `dart_analyzer_summary.bzl`), so a newer Flutter-bundled Dart
+  analyzes from source until the pinned analyzer is bumped.
+- `dart_codegen` passes `--summary` only to generators built on
+  `dart/ext/lib/builder_shim.dart`.
+- `--@rules_dart//dart:analyzer_summaries=false` restores source analysis.
+
+### `pub.package` stands in for its name in every hub (`8f3b716`)
+
+A `pub.package` declared by any module replaces that name in every
+`pub.from_lock` hub and in the deps of every locked package. Before, the name
+was dropped from hubs and from locked packages' deps, which broke rules_dart's
+own tools in a workspace declaring e.g. `path`.
+
+### Released as v0.8.0
+
+Tagged on `Mivr/rules_dart` only (not published to the BCR or pub.dev); see
+`README.md`, Status. rules_flutter can test against it with
+`--override_module` or `git_override`; a BCR pin needs the release run from
+`aran/rules_dart`.
 
 ## Coming (not on `main` yet; see `in-flight.md`)
