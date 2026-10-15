@@ -51,7 +51,7 @@ def _dart_test_impl(ctx):
     # with any generated sibling sources (e.g. a `.mocks.dart`), where they sit.
     own = executable_package(ctx, [ctx.file.main] + ctx.files.srcs)
     runner = _test_runner(ctx, own.packages)
-    kernel = _compile_test_kernel(ctx, own, bootstrap = runner != None)
+    kernel = _compile_test_kernel(ctx, own, bootstrap = runner != None, use_base_dill = runner != None)
     dill = kernel.dill
 
     # Thin launcher: run the self-contained dill with asserts enabled. The dill
@@ -68,7 +68,14 @@ def _dart_test_impl(ctx):
         env["RULES_DART_TEST_RUNNER"] = runfiles_path(runner, workspace_name)
         env["RULES_DART_TEST_MAIN"] = runfiles_path(ctx.file.main, workspace_name)
         env["RULES_DART_TEST_PATH"] = _test_path(ctx)
-        runner_files = [runner, ctx.file.main]
+        env["RULES_DART_BASE_DILL"] = (
+            runfiles_path(kernel.base_dill, workspace_name)
+            if kernel.base_dill != None
+            else ""
+        )
+        runner_files = [runner, ctx.file.main] + (
+            [kernel.base_dill] if kernel.base_dill != None else []
+        )
     executable, env_info, tool_runfiles = create_test_executable(
         ctx,
         ctx.attr._tool,
@@ -105,7 +112,7 @@ def _dart_test_impl(ctx):
         own.analyzable,
     ]
 
-def _compile_test_kernel(ctx, own, bootstrap):
+def _compile_test_kernel(ctx, own, bootstrap, use_base_dill = False):
     """Compiles a test's `main` to the kernel that a test runs from.
 
     `dart_test` and `dart_test_kernel` both compile through here, so the kernel
@@ -153,7 +160,7 @@ def _compile_test_kernel(ctx, own, bootstrap):
         compile_flags = [],
     )
     if kernel_tools != None:
-        return _compile_modular_test_kernel(ctx, own, bootstrap, kernel_tools)
+        return _compile_modular_test_kernel(ctx, own, bootstrap, kernel_tools, use_base_dill = use_base_dill)
 
     # Nothing is copied (see `executable_inputs`). The one flatten per rule: the
     # package lookup inspects per-file paths.
@@ -225,7 +232,7 @@ def _compile_test_kernel(ctx, own, bootstrap):
             main_path = main_arg,
             defines = defines,
         )
-    return struct(dill = dill, runtime_libs = runtime_libs)
+    return struct(dill = dill, base_dill = None, runtime_libs = runtime_libs)
 
 def _test_kernel_output(ctx, bootstrap):
     """Declares the kernel a test runs from, in the place its runner expects.
@@ -246,7 +253,7 @@ def _test_kernel_output(ctx, bootstrap):
         )
     return ctx.actions.declare_file(ctx.label.name + ".dill")
 
-def _compile_modular_test_kernel(ctx, own, bootstrap, tools):
+def _compile_modular_test_kernel(ctx, own, bootstrap, tools, use_base_dill = False):
     """Compiles a test's entry module and links it, in place of the monolithic kernel.
 
     The entry module holds only the test (or its bootstrap) and the test's own
@@ -259,25 +266,27 @@ def _compile_modular_test_kernel(ctx, own, bootstrap, tools):
       own: The `executable_package` result for the test's own sources.
       bootstrap: Whether the test runs under the `package:test` runner.
       tools: The exec kernel tools, from `modular_executable_tools`.
+      use_base_dill: Whether to link `dill` as a delta against a shared `base_dill`.
 
     Returns:
-      `struct(dill, runtime_libs)`, as `_compile_test_kernel` returns. Modular
-      mode takes no code assets, so `runtime_libs` is empty.
+      `struct(dill, base_dill, runtime_libs)`, as `_compile_test_kernel` returns.
+      Modular mode takes no code assets, so `runtime_libs` is empty.
     """
     dill = _test_kernel_output(ctx, bootstrap)
     if bootstrap:
         entry_files = [_write_modular_bootstrap(ctx), ctx.file.main]
     else:
         entry_files = [ctx.file.main]
-    modular_executable_kernel(
+    base_dill = modular_executable_kernel(
         ctx,
         tools,
         entry_sources(entry_files + ctx.files.srcs),
         own.packages,
         [dep[DartKernelInfo] for dep in ctx.attr.deps],
         dill,
+        use_base_dill = use_base_dill,
     )
-    return struct(dill = dill, runtime_libs = [])
+    return struct(dill = dill, base_dill = base_dill, runtime_libs = [])
 
 def _write_modular_bootstrap(ctx):
     """Writes the modular entrypoint: the runner's bootstrap, importing the test by URI.

@@ -212,5 +212,7 @@ modular, makes every executable that depends on it compile whole-program.""",
         "closure_excluded": "depset[File]: the `.vm_excluded.txt` sidecar of this library's module and of every module it links against. A dependent module reads them to exclude the sources that import an excluded file.",
         "owned": "depset[(str, str)]: a `(label, short_path)` for each source of this library and of every library it depends on. An executable finds a source that two libraries list, see `duplicated_source`.",
         "edges": "depset[(str, str)]: a `(label, dep_label)` for each `dart_library` this library and every library it depends on names as a dependency. Read with `owned`, to tell a source two libraries list one under the other from two that do not depend on each other.",
+        "base_dill": "File or None: optional pre-linked shared base `.dill` (e.g. for `package:test` or `package:flutter_test`) carried by this closure.",
+        "base_keys": "File or None: the `.keys` manifest listing the `<kmod>:<dill>` SCCs already present in `base_dill`.",
     },
 )

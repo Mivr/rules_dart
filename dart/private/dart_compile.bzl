@@ -99,7 +99,7 @@ def get_compilation_mode_flags(ctx, compile_mode):
 # `dart_compile_flags` that the Dart front end consumes. A source compile runs
 # the front end in `gen_kernel`, so these go there; the rest go to `dart compile`.
 FRONT_END_VALUE_FLAGS = ["--enable-experiment", "-D", "--define"]
-FRONT_END_SWITCHES = ["--enable-asserts"]
+FRONT_END_SWITCHES = ["--enable-asserts", "--no-embed-sources", "--embed-sources"]
 
 def split_compile_flags(flags):
     """Splits `dart_compile_flags` between the front end and `dart compile`.
@@ -235,8 +235,11 @@ def _kernel_action(
     if aot:
         args.add("--aot")
         args.add("--tfa")
+        args.add("--no-embed-sources")
         if target_os:
             args.add("--target-os", target_os)
+    elif ctx.label.name == "test_runner":
+        args.add("--no-embed-sources")
     if enable_asserts:
         args.add("--enable-asserts")
     for d in defines:

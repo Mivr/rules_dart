@@ -70,9 +70,6 @@ KERNEL_MODULE_ATTRS = {
         executable = True,
         cfg = "exec",
     ),
-}
-
-MODULAR_KERNEL_ATTRS = KERNEL_MODULE_ATTRS | {
     "_kernel_link": attr.label(
         doc = "The tool that links an executable's kernel from the kernels its entry reaches. See `kernel_link.dart`.",
         default = Label("//dart/private/tools:kernel_link"),
@@ -80,6 +77,8 @@ MODULAR_KERNEL_ATTRS = KERNEL_MODULE_ATTRS | {
         cfg = "exec",
     ),
 }
+
+MODULAR_KERNEL_ATTRS = dict(KERNEL_MODULE_ATTRS)
 
 # Optional, so a build that registers no exec tools toolchain keeps compiling
 # whole-program rather than failing. See `kernel_tools_for`.
@@ -415,6 +414,8 @@ def no_kernel_module():
         closure_excluded = depset(),
         owned = depset(),
         edges = depset(),
+        base_dill = None,
+        base_keys = None,
     )
 
 def kernel_module_action(
@@ -572,18 +573,32 @@ def kernel_module_action(
     )
     return excluded
 
-def kernel_link_action(ctx, dep_kmods, entry, output):
-    """Links an executable's kernel from the kernels its entry reaches.
+def kernel_link_action(
+        ctx,
+        dep_kmods,
+        entry = None,
+        output = None,
+        seed_modules = [],
+        base_keys = None,
+        write_keys = None):
+    """Links an executable's or base module's kernel from reachable module kernels.
 
     `kernel_link` reads each module's `index.json`, and writes the kernels reachable
-    from the entry's imports, each after the kernels it imports, then the entry's own.
-    The link tool reads only these directories, so it needs no SDK as an input.
+    from the entry's imports (or `seed_modules`), each after the kernels it imports,
+    then the entry's own. The link tool reads only these directories, so it needs no
+    SDK as an input.
 
     Args:
       ctx: The rule context, carrying the `_kernel_link` executable.
       dep_kmods: Postorder depset of the dependency module directories.
-      entry: The entry module's directory, which holds its kernel and index.
+      entry: The entry module's directory, which holds its kernel and index, or
+        None when linking a shared base `.dill` from `seed_modules`.
       output: The linked kernel File to produce.
+      seed_modules: List of module directories to seed reachability from when
+        linking a shared base `.dill`.
+      base_keys: Optional `.keys` File listing `<kmod>:<dill>` SCCs already present
+        in a shared base `.dill` (to skip emitting into `output`).
+      write_keys: Optional `.keys` File to write the emitted `<kmod>:<dill>` keys to.
     """
 
     # The module list can run long, and a Windows command line has a length limit,
@@ -591,14 +606,33 @@ def kernel_link_action(ctx, dep_kmods, entry, output):
     args = ctx.actions.args()
     args.use_param_file("@%s", use_always = True)
     args.set_param_file_format("multiline")
+    if write_keys != None:
+        args.add("--write-keys", write_keys)
+    if base_keys != None:
+        args.add("--base-keys", base_keys)
+    for seed in seed_modules:
+        args.add("--seed-module", seed.path)
     args.add(output)
-    args.add(entry.path)
+    if entry != None:
+        args.add(entry.path)
     args.add_all(dep_kmods, expand_directories = False)
+
+    direct_inputs = []
+    if entry != None:
+        direct_inputs.append(entry)
+    direct_inputs.extend(seed_modules)
+    if base_keys != None:
+        direct_inputs.append(base_keys)
+
+    outputs = [output]
+    if write_keys != None:
+        outputs.append(write_keys)
+
     ctx.actions.run(
         executable = ctx.executable._kernel_link,
         arguments = [args],
-        inputs = depset(direct = [entry], transitive = [dep_kmods]),
-        outputs = [output],
+        inputs = depset(direct = direct_inputs, transitive = [dep_kmods]),
+        outputs = outputs,
         mnemonic = "DartKernelLink",
         progress_message = "Linking Dart kernel %s" % ctx.label,
     )
@@ -700,7 +734,8 @@ def modular_executable_kernel(
         libraries_platform = None,
         extra_libraries = [],
         scheme = STABLE_SCHEME,
-        extra_frontend_flags = []):
+        extra_frontend_flags = [],
+        use_base_dill = False):
     """Compiles an executable's entry module, then links it to `output`.
 
     The entry compiles from source whatever it reaches that no dependency module
@@ -721,6 +756,12 @@ def modular_executable_kernel(
       extra_libraries: Extra bare `dart:` library names available on the target.
       scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
       extra_frontend_flags: Extra flags forwarded to `kernel_worker`.
+      use_base_dill: When True, links `output` as a delta against any shared
+        `base_dill`/`base_keys` provided in `dep_kernels` and returns `base_dill`.
+
+    Returns:
+      The shared `base_dill` File if `use_base_dill` is True and a dependency
+      provides one, or None.
     """
     dep_closure = depset(
         order = "postorder",
@@ -747,7 +788,18 @@ def modular_executable_kernel(
         scheme = scheme,
         extra_frontend_flags = extra_frontend_flags,
     )
-    kernel_link_action(ctx, dep_closure, entry, output)
+    base_dill = None
+    base_keys = None
+    if use_base_dill:
+        for k in dep_kernels:
+            kd = getattr(k, "base_dill", None)
+            kk = getattr(k, "base_keys", None)
+            if kd != None and kk != None:
+                base_dill = kd
+                base_keys = kk
+                break
+    kernel_link_action(ctx, dep_closure, entry, output, base_keys = base_keys)
+    return base_dill
 
 def library_kernel_info(
         ctx,
@@ -816,6 +868,15 @@ def library_kernel_info(
         [(str(ctx.label), str(dep.label)) for dep in ctx.attr.deps],
         transitive = [k.edges for k in dep_kernels],
     )
+    base_dill = None
+    base_keys = None
+    for k in dep_kernels:
+        kd = getattr(k, "base_dill", None)
+        kk = getattr(k, "base_keys", None)
+        if kd != None and kk != None:
+            base_dill = kd
+            base_keys = kk
+            break
     if not own_srcs:
         # A façade: nothing to compile, but its dependencies' modules still link.
         return DartKernelInfo(
@@ -825,6 +886,8 @@ def library_kernel_info(
             closure_excluded = upstream_excluded,
             owned = owned,
             edges = edges,
+            base_dill = base_dill,
+            base_keys = base_keys,
         )
 
     kmod = ctx.actions.declare_directory(ctx.label.name + ".kmod")
@@ -851,6 +914,17 @@ def library_kernel_info(
         scheme = scheme,
         extra_frontend_flags = extra_frontend_flags,
     )
+    if package_name == "test" and target == "vm" and hasattr(ctx.executable, "_kernel_link"):
+        base_dill = ctx.actions.declare_file(ctx.label.name + ".base.dill")
+        base_keys = ctx.actions.declare_file(ctx.label.name + ".base.keys")
+        kernel_link_action(
+            ctx,
+            dep_closure,
+            entry = None,
+            output = base_dill,
+            seed_modules = [kmod],
+            write_keys = base_keys,
+        )
     return DartKernelInfo(
         kmod = kmod,
         transitive_kmods = depset(order = "postorder", direct = [kmod], transitive = [dep_closure]),
@@ -858,4 +932,6 @@ def library_kernel_info(
         closure_excluded = depset(direct = [excluded], transitive = [upstream_excluded]),
         owned = owned,
         edges = edges,
+        base_dill = base_dill,
+        base_keys = base_keys,
     )

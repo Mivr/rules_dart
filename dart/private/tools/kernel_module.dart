@@ -350,6 +350,7 @@ Future<int> compileModule(
     ModuleOutcome? failure;
     var failedUris = const <String>[];
     for (final scc in sccs) {
+      final dillPath = '$output/${scc.dill}';
       final outcome = await compiler.run([
         ...base,
         for (final d in neededDills(scc.imports, local)) ...[
@@ -358,14 +359,21 @@ Future<int> compileModule(
         ],
         for (final uri in scc.uris) ...['--source', uri],
         '--output',
-        '$output/${scc.dill}',
+        dillPath,
       ], inputs);
       if (outcome.exitCode != 0) {
         failure = outcome;
         failedUris = scc.uris;
         break;
       }
-      final node = _Node('$output/${scc.dill}', scc.imports);
+      final dillFile = File(dillPath);
+      if (await dillFile.exists()) {
+        await dillFile.writeAsBytes(
+          _stripSourceCodeFromDill(await dillFile.readAsBytes()),
+        );
+        _digestCache.remove(dillPath);
+      }
+      final node = _Node(dillPath, scc.imports);
       for (final key in scc.keys) {
         local[key] = node;
       }
@@ -1934,4 +1942,129 @@ Uint8List _encodeResponse(int exitCode, String output, int requestId) {
     ..stringField(2, output)
     ..varintField(3, requestId);
   return writer.toBytes();
+}
+
+/// Strips `Source.sourceCode` UTF-8 bytes from a compiled Kernel `.dill` while
+/// preserving `uri`, `lineStarts`, `importUri`, and `constantCoverageConstructors`.
+///
+/// `kernel_worker` has no `--no-embed-sources` flag, so it embeds the full source
+/// text of every `.dart` file in each module `.dill`'s `SourceTable` (~55% of all
+/// `.dill` bytes). The VM uses `lineStarts` (not `sourceCode`) for stack traces and
+/// `SourceReport` coverage, and downstream `--input-linked` compiles read only
+/// library outlines.
+Uint8List stripSourceCodeFromDill(Uint8List data) =>
+    _stripSourceCodeFromDill(data);
+
+Uint8List _stripSourceCodeFromDill(Uint8List data) {
+  if (data.length < 48) return data;
+  final bd = ByteData.sublistView(data);
+  if (bd.getUint32(0) != 0x90abcdef) return data;
+  final size = bd.getUint32(data.length - 4);
+  if (size != data.length) return data;
+  final libCount = bd.getUint32(data.length - 8);
+  final idxCount = libCount + 12;
+  final idxBytes = idxCount * 4;
+  if (idxBytes > data.length) return data;
+  final rawIdxStart = data.length - idxBytes;
+
+  final fields = List<int>.generate(
+    idxCount,
+    (i) => bd.getUint32(rawIdxStart + i * 4),
+  );
+  final offSourceTable = fields[0];
+  final offConstantTable = fields[1];
+  final offComponentIndex = fields[7];
+  if (offSourceTable + 4 > offConstantTable ||
+      offConstantTable > offComponentIndex ||
+      offComponentIndex > rawIdxStart) {
+    return data;
+  }
+
+  final numSources = bd.getUint32(offSourceTable);
+  if (numSources == 0) return data;
+
+  var pos = offSourceTable + 4;
+  int readUInt30() {
+    final b0 = data[pos++];
+    if ((b0 & 0x80) == 0) return b0;
+    if ((b0 & 0x40) == 0) {
+      return ((b0 & 0x3f) << 8) | data[pos++];
+    }
+    final b1 = data[pos++];
+    final b2 = data[pos++];
+    final b3 = data[pos++];
+    return ((b0 & 0x3f) << 24) | (b1 << 16) | (b2 << 8) | b3;
+  }
+
+  final newSt = BytesBuilder(copy: false);
+  final header4 = ByteData(4)..setUint32(0, numSources);
+  newSt.add(header4.buffer.asUint8List());
+  final newSourceOffsets = List<int>.filled(numSources, 0);
+
+  for (var i = 0; i < numSources; i++) {
+    newSourceOffsets[i] = offSourceTable + newSt.length;
+
+    // 1. uri: UInt30 byteLength + UTF-8 bytes
+    final uStart = pos;
+    final uLen = readUInt30();
+    pos += uLen;
+    newSt.add(Uint8List.sublistView(data, uStart, pos));
+
+    // 2. sourceCode: UInt30 byteLength + UTF-8 bytes -> replace with empty (0x00)
+    final sLen = readUInt30();
+    pos += sLen;
+    newSt.addByte(0);
+
+    // 3. lineStarts: UInt30 count + count * UInt30 delta
+    final lsStart = pos;
+    final lineCount = readUInt30();
+    for (var j = 0; j < lineCount; j++) {
+      readUInt30();
+    }
+    // 4. importUri: UInt30 byteLength + UTF-8 bytes
+    final iuLen = readUInt30();
+    pos += iuLen;
+    // 5. constantCoverageConstructors: UInt30 count + count * UInt30
+    final ccCount = readUInt30();
+    for (var j = 0; j < ccCount; j++) {
+      readUInt30();
+    }
+    newSt.add(Uint8List.sublistView(data, lsStart, pos));
+  }
+
+  final offsetsBuf = ByteData(numSources * 4);
+  for (var i = 0; i < numSources; i++) {
+    offsetsBuf.setUint32(i * 4, newSourceOffsets[i]);
+  }
+  newSt.add(offsetsBuf.buffer.asUint8List());
+
+  final newStBytes = newSt.takeBytes();
+  final oldStLen = offConstantTable - offSourceTable;
+  final delta = newStBytes.length - oldStLen;
+  if (delta == 0) return data;
+
+  final out = BytesBuilder(copy: false);
+  out.add(Uint8List.sublistView(data, 0, offSourceTable));
+  out.add(newStBytes);
+  out.add(Uint8List.sublistView(data, offConstantTable, offComponentIndex));
+
+  final newOffComponentIndex = out.length;
+  final totalUnpadded = out.length + idxBytes;
+  final pad = (8 - (totalUnpadded % 8)) % 8;
+  if (pad > 0) {
+    out.add(Uint8List(pad));
+  }
+
+  for (var i = 1; i <= 6; i++) {
+    fields[i] += delta;
+  }
+  fields[7] = newOffComponentIndex;
+  fields[idxCount - 1] = out.length + idxBytes;
+
+  final idxBuf = ByteData(idxBytes);
+  for (var i = 0; i < idxCount; i++) {
+    idxBuf.setUint32(i * 4, fields[i]);
+  }
+  out.add(idxBuf.buffer.asUint8List());
+  return out.takeBytes();
 }
