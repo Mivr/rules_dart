@@ -125,6 +125,7 @@ bzl_library(
     srcs = ["repositories.bzl"],
     visibility = ["//visibility:public"],
     deps = [
+        ":toolchain",
         "//dart/private:toolchains_repo",
         "//dart/private:versions",
     ],
