@@ -48,8 +48,13 @@ Future<void> main(List<String> args) async {
       rawArgs.add(arg);
     }
   }
+  await _linkOne(rawArgs);
+}
+
+Future<void> _linkOne(List<String> rawArgs) async {
   String? writeKeysPath;
   String? baseKeysPath;
+  String? platform;
   final seedModules = <String>[];
   final paths = <String>[];
   for (var i = 0; i < rawArgs.length; i++) {
@@ -61,6 +66,10 @@ Future<void> main(List<String> args) async {
       baseKeysPath = rawArgs[++i];
     } else if (arg == '--seed-module') {
       seedModules.add(rawArgs[++i]);
+    } else if (arg == '--platform' && i + 1 < rawArgs.length) {
+      platform = rawArgs[++i];
+    } else if (arg.startsWith('--platform=')) {
+      platform = arg.substring('--platform='.length);
     } else {
       paths.add(arg);
     }
@@ -169,6 +178,9 @@ Future<void> main(List<String> args) async {
   ];
 
   final sink = File(output).openWrite();
+  if (platform != null) {
+    await sink.addStream(File(platform).openRead());
+  }
   for (final kernel in emitted) {
     await sink.addStream(File(kernel.path).openRead());
   }

@@ -17,6 +17,7 @@ load(
     "entry_sources",
     "first_per_package",
     "generate_stable_package_config",
+    "kernel_link_action",
     "kernel_module_action",
     "kernel_package_config",
     "kernel_packages_consistent",
@@ -407,9 +408,17 @@ def _custom_kernel_module_fixture_impl(ctx):
         scheme = "org-dartlang-app",
         extra_frontend_flags = ["--track-widget-creation"],
     )
+    linked_dill = ctx.actions.declare_file(ctx.label.name + "_linked.dill")
+    kernel_link_action(
+        ctx = ctx,
+        dep_kmods = depset(order = "postorder"),
+        entry = kmod,
+        output = linked_dill,
+        platform_dill = custom_platform_dill,
+    )
     info = no_kernel_module()
     return [
-        DefaultInfo(files = depset([kmod, koutline, excluded])),
+        DefaultInfo(files = depset([kmod, koutline, excluded, linked_dill])),
         DartKernelInfo(
             kmod = kmod,
             koutline = koutline,
@@ -428,6 +437,11 @@ _custom_kernel_module_fixture = rule(
     attrs = {
         "_kernel_module": attr.label(
             default = Label("//dart:kernel_module"),
+            executable = True,
+            cfg = "exec",
+        ),
+        "_kernel_link": attr.label(
+            default = Label("//dart:kernel_link"),
             executable = True,
             cfg = "exec",
         ),
@@ -505,6 +519,21 @@ def _kernel_module_action_custom_params_test_impl(ctx):
         env,
         any([b.endswith("_default_libraries.json") for b in input_basenames]),
         "default libraries_json is replaced when custom libraries_json is given",
+    )
+
+    link_actions = [a for a in actions if a.mnemonic == "DartKernelLink"]
+    asserts.equals(env, 1, len(link_actions), "registers one DartKernelLink action")
+    link_action = link_actions[0]
+    asserts.true(
+        env,
+        "--platform" in link_action.argv,
+        "--platform passed to DartKernelLink when platform_dill is provided",
+    )
+    link_input_basenames = [f.basename for f in link_action.inputs.to_list()]
+    asserts.true(
+        env,
+        any([b.endswith("_flutter_platform_strong.dill") for b in link_input_basenames]),
+        "platform_dill is included in DartKernelLink inputs",
     )
     return analysistest.end(env)
 

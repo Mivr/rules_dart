@@ -588,13 +588,14 @@ def kernel_link_action(
         output = None,
         seed_modules = [],
         base_keys = None,
-        write_keys = None):
+        write_keys = None,
+        platform_dill = None):
     """Links an executable's or base module's kernel from reachable module kernels.
 
     `kernel_link` reads each module's `index.json`, and writes the kernels reachable
     from the entry's imports (or `seed_modules`), each after the kernels it imports,
     then the entry's own. The link tool reads only these directories, so it needs no
-    SDK as an input.
+    SDK as an input unless `platform_dill` is provided.
 
     Args:
       ctx: The rule context, carrying the `_kernel_link` executable.
@@ -607,6 +608,8 @@ def kernel_link_action(
       base_keys: Optional `.keys` File listing `<kmod>:<dill>` SCCs already present
         in a shared base `.dill` (to skip emitting into `output`).
       write_keys: Optional `.keys` File to write the emitted `<kmod>:<dill>` keys to.
+      platform_dill: Optional platform `.dill` File to prepend as the first
+        sub-component in `output`.
     """
 
     # The module list can run long, and a Windows command line has a length limit,
@@ -620,6 +623,8 @@ def kernel_link_action(
         args.add("--base-keys", base_keys)
     for seed in seed_modules:
         args.add("--seed-module", seed.path)
+    if platform_dill != None:
+        args.add("--platform", platform_dill)
     args.add(output)
     if entry != None:
         args.add(entry.path)
@@ -631,6 +636,8 @@ def kernel_link_action(
     direct_inputs.extend(seed_modules)
     if base_keys != None:
         direct_inputs.append(base_keys)
+    if platform_dill != None:
+        direct_inputs.append(platform_dill)
 
     outputs = [output]
     if write_keys != None:
