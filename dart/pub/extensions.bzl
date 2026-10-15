@@ -3,8 +3,8 @@
 load("//dart/ext:registry.bzl", "curated_code_assets")
 load("//dart/pub:pub_lock_hub.bzl", "pub_lock_hub")
 load("//dart/pub:pub_lock_package.bzl", "pub_lock_package")
-load("//dart/pub:yaml_parser.bzl", "parse_pubspec_lock")
-load("//dart/pub/private:pub_repository.bzl", "pub_package")
+load("//dart/pub:yaml_parser.bzl", "lock_package_error", "parse_pubspec_lock")
+load("//dart/pub/private:pub_repository.bzl", "pub_package", "pub_package_sha256_error")
 load("//dart/pub/private:version.bzl", "semver_gt")
 
 _SPOKE_PREFIX = "dart_pub"
@@ -84,6 +84,9 @@ def _pub_impl(ctx):
                 explicit[pkg.name] = pkg
 
     for name, pkg in explicit.items():
+        err = pub_package_sha256_error(name, pkg.version, pkg.sha256)
+        if err:
+            fail(err)
         pub_package(
             name = name,
             package_name = name,
@@ -125,6 +128,10 @@ def _pub_impl(ctx):
             skipped_by_source = {}
 
             for name, info in lock_pkgs.items():
+                err = lock_package_error(name, info, lock_tag.lock)
+                if err:
+                    fail(err)
+
                 source = info.get("source", "unknown")
                 if source != "hosted":
                     skipped_by_source.setdefault(source, []).append(name)
@@ -142,7 +149,7 @@ def _pub_impl(ctx):
                 url = desc.get("url", "https://pub.dev")
                 entry = struct(
                     version = info.get("version", ""),
-                    sha256 = desc.get("sha256", ""),
+                    sha256 = desc["sha256"],
                     hub_name = hub_name,
                     lock_label = str(lock_tag.lock),
                     on_version_conflict = lock_tag.on_version_conflict,

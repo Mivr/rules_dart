@@ -1,7 +1,11 @@
 """Unit tests for yaml_parser.bzl."""
 
 load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//dart/pub:yaml_parser.bzl", "parse_pubspec_deps", "parse_pubspec_lock", "parse_pubspec_sdk_constraint")
+load("//dart/pub:pub_lock_package.bzl", "pub_lock_package_sha256_error")
+load("//dart/pub:yaml_parser.bzl", "lock_package_error", "parse_pubspec_deps", "parse_pubspec_lock", "parse_pubspec_sdk_constraint")
+
+# buildifier: disable=bzl-visibility
+load("//dart/pub/private:pub_repository.bzl", "pub_package_sha256_error")
 load(":small_suite.bzl", "small_unittest_suite")
 
 _SAMPLE_LOCK = """\
@@ -131,6 +135,100 @@ def _parse_pubspec_sdk_numeric_test_impl(ctx):
     asserts.equals(env, "", parse_pubspec_sdk_constraint("environment: 3\n"))
     return unittest.end(env)
 
+def _lock_package_missing_sha256_test_impl(ctx):
+    env = unittest.begin(ctx)
+    parsed = parse_pubspec_lock(_SAMPLE_LOCK)
+    asserts.equals(env, None, lock_package_error("collection", parsed["collection"], "//:pubspec.lock"))
+    asserts.equals(env, None, lock_package_error("flutter", parsed["flutter"], "//:pubspec.lock"))
+
+    unpinned_lock = """\
+packages:
+  collection:
+    dependency: "direct main"
+    description:
+      name: collection
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.18.0"
+  empty_sha:
+    dependency: "direct main"
+    description:
+      name: empty_sha
+      sha256:
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.0.0"
+"""
+    unpinned = parse_pubspec_lock(unpinned_lock)
+    asserts.equals(
+        env,
+        'pub package "collection" 1.18.0 in //:pubspec.lock has no sha256. Run `dart pub get` (Dart 2.19 or newer records one) and commit the lock.',
+        lock_package_error("collection", unpinned["collection"], "//:pubspec.lock"),
+    )
+    asserts.equals(
+        env,
+        'pub package "empty_sha" 2.0.0 in //:pubspec.lock has no sha256. Run `dart pub get` (Dart 2.19 or newer records one) and commit the lock.',
+        lock_package_error("empty_sha", unpinned["empty_sha"], "//:pubspec.lock"),
+    )
+    asserts.equals(env, None, pub_lock_package_sha256_error("collection", "1.18.0", "abc123"))
+    asserts.equals(
+        env,
+        'pub_lock_package "collection" (1.18.0) requires a non-empty sha256.',
+        pub_lock_package_sha256_error("collection", "1.18.0", ""),
+    )
+    asserts.equals(env, None, pub_package_sha256_error("collection", "1.18.0", "abc123"))
+    asserts.equals(
+        env,
+        'pub_package "collection" (1.18.0) requires a non-empty sha256.',
+        pub_package_sha256_error("collection", "1.18.0", ""),
+    )
+    return unittest.end(env)
+
+def _lock_package_missing_resolved_ref_test_impl(ctx):
+    env = unittest.begin(ctx)
+    git_lock = """\
+packages:
+  pinned_git:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: main
+      resolved-ref: "deadbeef1234567890"
+      url: "https://example.com/repo.git"
+    source: git
+    version: "1.0.0"
+  unpinned_git:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: main
+      url: "https://example.com/repo.git"
+    source: git
+    version: "1.0.0"
+  null_ref_git:
+    dependency: "direct main"
+    description:
+      path: "."
+      ref: main
+      resolved-ref:
+      url: "https://example.com/repo.git"
+    source: git
+    version: "1.2.3"
+"""
+    parsed = parse_pubspec_lock(git_lock)
+    asserts.equals(env, None, lock_package_error("pinned_git", parsed["pinned_git"], "//:pubspec.lock"))
+    asserts.equals(
+        env,
+        'pub package "unpinned_git" 1.0.0 in //:pubspec.lock has no resolved-ref. Run `dart pub get` and commit the lock.',
+        lock_package_error("unpinned_git", parsed["unpinned_git"], "//:pubspec.lock"),
+    )
+    asserts.equals(
+        env,
+        'pub package "null_ref_git" 1.2.3 in //:pubspec.lock has no resolved-ref. Run `dart pub get` and commit the lock.',
+        lock_package_error("null_ref_git", parsed["null_ref_git"], "//:pubspec.lock"),
+    )
+    return unittest.end(env)
+
 _t0_test = unittest.make(_parse_lock_packages_test_impl)
 _t1_test = unittest.make(_parse_lock_hosted_test_impl)
 _t2_test = unittest.make(_parse_lock_sdk_test_impl)
@@ -141,6 +239,8 @@ _t6_test = unittest.make(_parse_lock_flow_description_test_impl)
 _t7_test = unittest.make(_parse_lock_unquoted_version_test_impl)
 _t8_test = unittest.make(_parse_pubspec_deps_flow_test_impl)
 _t9_test = unittest.make(_parse_pubspec_sdk_numeric_test_impl)
+_t10_test = unittest.make(_lock_package_missing_sha256_test_impl)
+_t11_test = unittest.make(_lock_package_missing_resolved_ref_test_impl)
 
 def yaml_parser_test_suite(name):
     small_unittest_suite(
@@ -155,4 +255,6 @@ def yaml_parser_test_suite(name):
         _t7_test,
         _t8_test,
         _t9_test,
+        _t10_test,
+        _t11_test,
     )

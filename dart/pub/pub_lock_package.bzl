@@ -19,7 +19,24 @@ load("//dart/pub/private:language_version.bzl", _derive_language_version = "deri
 derive_language_version = _derive_language_version
 make_dart_library_build_content = _make_dart_library_build_content
 
+def pub_lock_package_sha256_error(package_name, version, sha256):
+    """Returns an error string when `sha256` is empty, or None."""
+    if not sha256:
+        return 'pub_lock_package "%s" (%s) requires a non-empty sha256.' % (
+            package_name,
+            version,
+        )
+    return None
+
 def _pub_lock_package_impl(ctx):
+    err = pub_lock_package_sha256_error(
+        ctx.attr.package_name,
+        ctx.attr.version,
+        ctx.attr.sha256,
+    )
+    if err:
+        fail(err)
+
     url = "{base}/packages/{name}/versions/{version}.tar.gz".format(
         base = ctx.attr.base_url,
         name = ctx.attr.package_name,
@@ -39,7 +56,7 @@ def _pub_lock_package_impl(ctx):
     ctx.download(
         url = url,
         output = "_archive.tar.gz",
-        sha256 = ctx.attr.sha256 if ctx.attr.sha256 else "",
+        sha256 = ctx.attr.sha256,
     )
     result = ctx.execute(["tar", "-xzf", "_archive.tar.gz"])
     if result.return_code != 0:
