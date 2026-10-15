@@ -58,8 +58,8 @@ and nothing else does. It stages only the target's own files and checks them wit
 `analyzer_summary analyze` against the summaries of its dependencies, which
 `dart_analyzer_summary` builds (see that file). A target keeps the staged closure
 and `dart analyze` when its flag is off, when the analyzing SDK is newer than the
-pinned analyzer supports, when its closure holds a Flutter embedder
-(`sky_engine`, or a `lib/_embedder.yaml`), or when a dependency lacks a summary.
+pinned analyzer supports, when its closure holds an unbacked embedder
+(`unbacked_embedder_in_closure`), or when a dependency lacks a summary.
 `DartAnalysisModeInfo` says which mode a target was checked in.
 The format check and the fix action are the same in both modes. In this mode
 the diagnostics come from the pinned `package:analyzer` with the SDK linter
@@ -70,7 +70,7 @@ vendored in `//third_party/dart_linter`, so they can drift from `dart analyze`
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//dart:providers.bzl", "DartAnalysisOptionsInfo", "DartAnalyzableInfo", "DartInfo")
 load("//dart/private:common.bzl", "merge_package_records", "own_package_record", "writable_home_env")
-load("//dart/private:dart_analyzer_summary.bzl", "CONFLICT_PREFIX", "DartAnalyzerSummaryInfo", "analyzer_summaries_supported", "closure_attrs", "dart_analyzer_summary", "embedder_in_closure", "own_lib_sources", "package_key", "sdk_root_path")
+load("//dart/private:dart_analyzer_summary.bzl", "CONFLICT_PREFIX", "DartAnalyzerSummaryInfo", "analyzer_summaries_supported", "closure_attrs", "dart_analyzer_summary", "own_lib_sources", "package_key", "sdk_root_path", "unbacked_embedder_in_closure")
 load("//dart/private:project_staging.bzl", "pubspec_stub", "stage_dart_project", "staged_pubspec_paths")
 load("//dart/private:source_set.bzl", "COPY_TO_DIRECTORY_TOOLCHAINS")
 
@@ -282,7 +282,7 @@ def _analyze(ctx, name, staged, sdk_inputs):
     )
     return stamp
 
-def _analyze_summaries(ctx, name, staged, summaries, sdk_inputs):
+def _analyze_summaries(ctx, name, staged, summaries, sdk_summary, sdk_inputs):
     """Declares the summary-mode `dart analyze`; returns the stamp it writes on success.
 
     `staged` holds the target's own files and the options alone, and
@@ -297,28 +297,36 @@ def _analyze_summaries(ctx, name, staged, summaries, sdk_inputs):
     args.add("--project", staged.proj_path)
     args.add("--stamp", stamp)
     args.add("--fatal-infos")
-    args.add("--summary", ctx.file._sdk_summary)
+    args.add("--sdk-summary", sdk_summary)
     args.add_all(summaries, before_each = "--summary")
     ctx.actions.run(
         executable = ctx.executable._summary_tool,
         arguments = [args],
-        inputs = depset(direct = staged.inputs + [ctx.file._sdk_summary], transitive = [summaries, sdk_inputs]),
+        inputs = depset(direct = staged.inputs + [sdk_summary], transitive = [summaries, sdk_inputs]),
         outputs = [stamp],
         mnemonic = "DartAnalyze",
         progress_message = "Analyzing Dart sources of %{label} against summaries",
     )
     return stamp
 
+def _embedder_sdk_summary(ctx):
+    """Returns the single embedder SDK summary in `ctx`'s closure, or None."""
+    summaries = depset(transitive = [
+        d[DartAnalyzerSummaryInfo].embedder_sdk_summaries
+        for d in closure_attrs(ctx)
+        if DartAnalyzerSummaryInfo in d
+    ]).to_list()
+    return summaries[0] if len(summaries) == 1 else None
+
 def _summaries_ready(ctx, info, has_own_lib):
     """Whether the target can be analyzed from summaries.
 
     That is so when every package in its closure, but its own, has a summary,
-    and its closure holds no Flutter embedder. Each target's summary provider
-    names the packages its summaries cover, so a package the summary aspect
-    never reached, one a rule keeps outside `deps` and `library`, is absent from
-    them. The target then analyzes from source, which is slower and never wrong.
-    An embedder's `dart:ui` is not in any summary, so a closure holding one
-    analyzes from source even when every package is covered, its own included.
+    and any Flutter embedder in its closure is backed by an embedder SDK
+    summary. Each target's summary provider names the packages its summaries
+    cover, so a package the summary aspect never reached, one a rule keeps
+    outside `deps`, `library`, and `_sky_engine`, is absent from them. The
+    target then analyzes from source, which is slower and never wrong.
 
     Args:
       ctx: The aspect context.
@@ -328,7 +336,7 @@ def _summaries_ready(ctx, info, has_own_lib):
     Returns:
       True when the closure can be analyzed from summaries.
     """
-    if embedder_in_closure(info):
+    if unbacked_embedder_in_closure(info, _embedder_sdk_summary(ctx)):
         return False
     covered = {}
     for d in closure_attrs(ctx):
@@ -534,11 +542,13 @@ def _dart_analyze_aspect_impl(target, ctx):
                 copy_external = False,
                 all_packages_named = True,
             )
+            sdk_summary = _embedder_sdk_summary(ctx) or ctx.file._sdk_summary
             groups["dart_analyze"] = depset([_analyze_summaries(
                 ctx,
                 name,
                 summary_staged,
                 _dependency_summaries(ctx),
+                sdk_summary,
                 sdk_inputs,
             )])
         else:

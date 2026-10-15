@@ -118,14 +118,16 @@ default_mode_test(
     target_under_test = ":user",
 )
 
-# A Flutter embedder: `dart:ui` is in no summary, so `flutter_app` is analyzed
-# from source, with the flag at its default and on, and builds no summary.
-# `flutter_app` depends on `sky_engine`, which is not covered; `yaml_only` is
-# flagged by its `lib/_embedder.yaml` alone.
+# A Flutter embedder: `sky_engine`'s `lib/_embedder.yaml` builds an embedder SDK
+# summary with `dart:ui`, so `sky_engine` and `flutter_app` are covered,
+# `flutter_app` builds a summary, and `flutter_app` (and `flutter_consumer`
+# above it) are analyzed in summary mode. `yaml_only` is a non-`sky_engine`
+# package with `lib/_embedder.yaml`, so it has no embedder SDK summary and stays
+# uncovered.
 summary_packages_test(
     name = "embedder_uncovered_test",
     size = "small",
-    expect_uncovered = [
+    expect_covered = [
         "flutter_app",
         "sky_engine",
     ],
@@ -135,22 +137,29 @@ summary_packages_test(
 summary_file_test(
     name = "embedder_summary_file_test",
     size = "small",
-    expect_summary = False,
+    expect_summary = True,
     target_under_test = "//dart/tests/analyzer_summary_fixture/flutter/app:flutter_app",
 )
 
 default_mode_test(
     name = "embedder_default_mode_test",
     size = "small",
-    expect_summaries = False,
+    expect_summaries = True,
     target_under_test = "//dart/tests/analyzer_summary_fixture/flutter/app:flutter_app",
 )
 
 summaries_on_mode_test(
     name = "embedder_summaries_on_mode_test",
     size = "small",
-    expect_summaries = False,
+    expect_summaries = True,
     target_under_test = "//dart/tests/analyzer_summary_fixture/flutter/app:flutter_app",
+)
+
+default_mode_test(
+    name = "embedder_consumer_default_mode_test",
+    size = "small",
+    expect_summaries = True,
+    target_under_test = "//dart/tests/analyzer_summary_fixture/flutter/consumer:flutter_consumer",
 )
 
 summary_packages_test(
@@ -167,13 +176,16 @@ summary_file_test(
     target_under_test = "//dart/tests/analyzer_summary_fixture/flutter/yaml_only:yaml_only",
 )
 
-# The runtime check of the embedder: the analysis of `flutter_app` must pass. In
-# summary mode `dart:ui` would be unresolved and the check would fail, so this
-# passes only when the target is analyzed from source, where the embedder finds it.
+# The runtime check of the embedder: the summary-mode analysis of `flutter_app`
+# and of `flutter_consumer` (which reads `flutter_app`'s summary and the
+# embedder SDK summary) must pass.
 dart_analysis_test(
     name = "embedder_analysis_test",
     size = "small",
-    targets = ["//dart/tests/analyzer_summary_fixture/flutter/app:flutter_app"],
+    targets = [
+        "//dart/tests/analyzer_summary_fixture/flutter/app:flutter_app",
+        "//dart/tests/analyzer_summary_fixture/flutter/consumer:flutter_consumer",
+    ],
 )
 
 # The runtime check of summary mode: the default analysis of a closure that has

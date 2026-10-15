@@ -1,8 +1,8 @@
 load("//dart:defs.bzl", "dart_library")
 
-# A library that imports `dart:ui` through the embedder, so it analyzes only from
-# source. Its closure holds `sky_engine`, and the `dart_analyze` aspect must not
-# check it against summaries.
+# A library that imports `dart:ui` through the `sky_engine` embedder. Its
+# closure builds and uses `sky_engine`'s embedder SDK summary, so both its own
+# summary and its summary-mode analysis resolve `dart:ui`.
 dart_library(
     name = "flutter_app",
     package_name = "flutter_app",

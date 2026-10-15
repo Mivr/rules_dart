@@ -66,11 +66,16 @@ int _usageError(String message) {
 ///
 /// A dependency's summary refers to the SDK libraries it imports, such as
 /// `dart:io`, and those are not in any package's summary. Analysis reads them
-/// from this one, which every `summarize` and `analyze` also takes.
+/// from this one, which every `summarize` and `analyze` also takes. When
+/// `--embedder-yaml` is given, the embedder's libraries (Flutter's `dart:ui`,
+/// from `sky_engine`'s `lib/_embedder.yaml`) are built into the summary as
+/// well.
 Future<int> _sdk(_Args args) async {
+  final embedder = args.all('embedder-yaml');
   final bytes = await buildSdkSummary(
     resourceProvider: PhysicalResourceProvider.INSTANCE,
     sdkPath: p.absolute(args.single('sdk')),
+    embedderYamlPath: embedder.isEmpty ? null : p.absolute(embedder.single),
   );
   File(args.single('out')).writeAsBytesSync(bytes);
   return 0;
@@ -97,6 +102,7 @@ Future<int> _summarize(_Args args) async {
   final collection = AnalysisContextCollectionImpl(
     includedPaths: [for (final s in sources) p.absolute(s)],
     sdkPath: p.absolute(args.single('sdk')),
+    sdkSummaryPath: p.absolute(args.single('sdk-summary')),
     packageConfigFile: p.absolute(args.single('packages')),
     librarySummaryPaths: [for (final s in args.all('summary')) p.absolute(s)],
   );
@@ -130,6 +136,7 @@ Future<int> _analyze(_Args args) async {
   final collection = AnalysisContextCollectionImpl(
     includedPaths: [project],
     sdkPath: p.absolute(args.single('sdk')),
+    sdkSummaryPath: p.absolute(args.single('sdk-summary')),
     packageConfigFile: p.join(project, _packageConfig),
     librarySummaryPaths: [for (final s in args.all('summary')) p.absolute(s)],
   );
