@@ -37,6 +37,8 @@ Release notes for the `v0.8.0` tag (the tag message is this file). Previous rele
 - `dart_test` builds when unrelated `dart_library` targets list the same source
 - `dart_test` runs its own `main` when a library it imports defines a `main`
 - `pub.package` now replaces a locked package in every `pub.from_lock` hub and its dependents
+- Exported toolchain and tool defaults resolve against `@rules_dart` when used from external modules
+- Generated files in `bazel-out` take precedence over stale source copies in multi-root compiles
 
 
 ## Known issues
