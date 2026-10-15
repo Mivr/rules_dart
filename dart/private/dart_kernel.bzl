@@ -487,8 +487,8 @@ def kernel_module_action(
     args.add("--dart-sdk-summary", tools.platform_dill)
     args.add("--packages-file", package_config)
     args.add("--libraries-json", tools.libraries_json)
-    args.add("--multi-root", ".")
     args.add("--multi-root", ctx.bin_dir.path)
+    args.add("--multi-root", ".")
     args.add("--multi-root-scheme", STABLE_SCHEME)
     args.add_all(defines, format_each = "-D%s")
 

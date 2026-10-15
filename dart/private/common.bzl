@@ -856,10 +856,10 @@ def gen_kernel_args(ctx, tools, platform, package_config):
     """Starts the argument list of a `gen_kernel` run whose URIs are stable.
 
     The two `--filesystem-root`s are relative to the action's working directory,
-    the exec root. The first serves source files and the second the outputs of
-    the bin root, so a generated file resolves the same way a source does. The
-    caller appends the mode flags, `-o`, and the entrypoint as
-    `STABLE_SCHEME:///<stable_entry_path>`.
+    the exec root. The first serves the outputs of the bin root and the second
+    source files, so a generated file shadows any stale checked-in copy at the
+    same relative path. The caller appends the mode flags, `-o`, and the
+    entrypoint as `STABLE_SCHEME:///<stable_entry_path>`.
 
     Args:
         ctx: The rule context, for its bin directory.
@@ -878,8 +878,8 @@ def gen_kernel_args(ctx, tools, platform, package_config):
     if package_config != None:
         args.add("--packages", package_config)
     args.add("--filesystem-scheme", STABLE_SCHEME)
-    args.add("--filesystem-root", ".")
     args.add("--filesystem-root", ctx.bin_dir.path)
+    args.add("--filesystem-root", ".")
     return args
 
 def _exec_root_of(f):
