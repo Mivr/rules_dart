@@ -149,32 +149,28 @@ Status words: **done** (on `main`), **accepted** (queued in `plan.md`, not
 started), **landing** (in verification), **user** (needs the user's decision).
 Plan numbers refer to rules_dart's `plan.md`.
 
-### A. Export modular compilation with the target as a parameter: accepted (plan #16)
+### A. Export modular compilation with the target as a parameter: done (plan #16, `f90efba`)
 
-Not exported yet, and deliberately not before the two modular regressions
-(plan #14, `in-flight.md`) are fixed, so the exported API is the fixed one.
-What it will look like:
+- `@rules_dart//dart:providers.bzl` exports `DartKernelInfo`.
+- `@rules_dart//dart:utils.bzl` exports `DartKernelInfo`, `MODULAR_KERNEL_TOOLCHAINS`,
+  `KERNEL_MODULE_ATTRS`, `MODULAR_KERNEL_ATTRS`, `find_kernel_module_tools`,
+  `kernel_tools_for`, `dep_kernels_or_none`, `no_kernel_module`,
+  `kernel_module_action`, `kernel_link_action`, `library_kernel_info`,
+  `modular_executable_kernel`, `modular_executable_tools`, `modular_kernel_eligible`,
+  `multi_root_uri`, `entry_source_uri`, `library_source_uri`, `entry_sources`,
+  `kernel_package_config`, `kernel_packages_consistent`, `first_per_package`,
+  `duplicated_source`, `global_dart_defines`, `STABLE_SCHEME`, `stable_path`,
+  `stable_entry_path`, `generate_stable_package_config`, and `gen_kernel_args`.
+- `@rules_dart//dart:kernel_module` and `@rules_dart//dart:kernel_link` are
+  exported as public tool aliases.
+- `kernel_module_action` takes optional `target = "vm"`, `platform_dill = None`,
+  `libraries_json = None`, `libraries_platform = None`, `extra_libraries = []`,
+  `scheme = STABLE_SCHEME`, and `extra_frontend_flags = []`.
+- `kernel_module.dart` derives its multi-root prefix from `--multi-root-scheme`
+  and accepts `--libraries-platform` and repeatable `--extra-library` flags
+  (e.g. `extra_libraries = ["ui", "ui_web", "nativewrappers"]`).
 
-- `@rules_dart//dart:utils.bzl` exports the module-compile action helper
-  (today `kernel_module_action` in `dart/private/dart_kernel.bzl`), the
-  `kernel_module` and `kernel_link` tools as public labels, and
-  `find_kernel_module_tools`.
-- New parameters: `target` (`"vm"` today, hard-coded), `platform_dill` (today
-  `lib/_internal/vm_platform_strong.dill`; Flutter passes
-  `flutter_patched_sdk/vm_outline_strong.dill`), `libraries_platform` (the
-  `libraries.json` platform whose libraries count as available when the planner
-  resolves conditional imports and drops unsupported files; today `vm`),
-  `scheme` (see C) and `extra_inputs`.
-- The worker comes from `DartSdkInfo` as now: the tools are found under the SDK
-  that `dart` sits in (see J), so a Flutter-bundled SDK's
-  `kernel_worker_aot.dart.snapshot` is used when Flutter's toolchain is the one
-  resolved.
-- Caveat for the planner: it decides "available library" from `libraries.json`.
-  For `--target flutter`, `dart:ui` is not in the Dart SDK's `libraries.json`;
-  the helper will take the list of extra available `dart:` libraries (or
-  Flutter's own `libraries.json`) as a parameter.
-
-### B. Analyzer summaries and `dart:ui`: done (plan #17b)
+### B. Analyzer summaries and `dart:ui`: done (plan #17b, `aa0dc5b`)
 
 `dart_analyzer_summary` now propagates along `deps`, `library`, and
 `_sky_engine`. When it visits Flutter's `sky_engine` package (with
@@ -188,48 +184,25 @@ directly from the embedder SDK summary without staging `sky_engine`. Flutter
 targets work automatically with `//dart:analyzer_summaries` (on by default); no
 flag or rule change is needed in `rules_flutter`.
 
-### C. One stable URI scheme: proposal
+### C. One stable URI scheme: done (plan #16, `f90efba`)
 
-rules_dart's convention (`d2120e8`, `common.bzl`):
+`generate_stable_package_config`, `gen_kernel_args`, `multi_root_uri`,
+`entry_source_uri`, `entry_sources`, `kernel_package_config`, and
+`kernel_module_action` accept an optional `scheme = STABLE_SCHEME` parameter
+(default `"org-dartlang-bazel"`). Flutter passes `scheme = "org-dartlang-app"`
+and mounts the same two roots (`ctx.bin_dir.path` before `.`).
 
-- scheme `org-dartlang-bazel` (`STABLE_SCHEME`);
-- two roots, mounted with `--filesystem-root` / `--multi-root`: the exec root
-  (`.`) and the configuration's bin directory;
-- a URI's path is the file's `short_path`, with a leading `../<repo>/` written
-  `external/<repo>/` (`stable_path`). A package's `rootUri` is
-  `org-dartlang-bazel:///<lib_root>`, so a package split between the source
-  tree and `bazel-out` resolves with no copy.
+### D. A version to depend on: done (`v0.8.1`)
 
-Proposal: the path convention is the contract, and the scheme name is a
-parameter. Flutter keeps `org-dartlang-app` for frontend_server and hot reload,
-mounts the same two roots, and uses the same path rule; the exported helpers of
-A take `scheme`. One program never mixes schemes, because each rule set builds
-its own modules for its own target, so nothing needs one global name. If
-Flutter would rather have one name everywhere, rules_dart can switch its
-default to `org-dartlang-app`; it is one constant, and the outputs stay
-reproducible. Tell us which you prefer.
+Tagged `v0.8.1` on `Mivr/rules_dart` (including asks A, B, C, E, H, I, J, K).
 
-### D. A version to depend on: user
+### E. A macro declaring an SDK toolchain over a directory: done (plan #18, `0f1999b`)
 
-Releases are the user's call. For testing, use tag `v0.8.0` on `Mivr/rules_dart` (see `README.md`, Status).
-
-### E. A macro declaring an SDK toolchain over a directory: accepted (plan #18)
-
-`dart/repositories.bzl` will expose the filegroups (`sdk_root`,
-`compile_files`, `runtime_files`, `analyze_files`) and the `dart_toolchain`
-declaration as a macro taking a path prefix (e.g. `bin/cache/dart-sdk/`), and
-use it itself, so the file lists live in one place.
-
-Precedence: under bzlmod, toolchains the root module registers are considered
-before those of its dependencies, so a root-registered `dart_toolchain` wins.
-That the default SDK is then not fetched is expected (resolution loads the
-`toolchain()` declarations in `@dart_toolchains`, not the SDK repository a
-non-selected one points at) but NOT yet verified; plan #18 includes a test
-workspace that proves it. Note there are three toolchain types to register for
-a full replacement: `//dart:toolchain_type`, `//dart:exec_tools_toolchain_type`
-(codegen, analysis, the module compiler, the runner snapshot) and, once H
-lands, `//dart:copy_toolchain_type` (its tool is a `dart_binary`, so it uses
-whichever `//dart:toolchain_type` is resolved and needs nothing from you).
+`@rules_dart//dart:toolchain.bzl` and `@rules_dart//dart:repositories.bzl`
+export `declare_dart_sdk_toolchains(version, dart, prefix = "", sdk_root_name = "sdk_root", cross_targets = ())`,
+which declares `sdk_root_name` (and an `sdk_root` alias when `sdk_root_name != "sdk_root"`),
+`compile_files`, `runtime_files`, `analyze_files`, `dart_toolchain`, and
+`dart_toolchain_cross_<platform>`.
 
 ### F. A Dart other than the default: per feature
 
@@ -240,11 +213,10 @@ whichever `//dart:toolchain_type` is resolved and needs nothing from you).
   the VM build, so it always matches its SDK.
 - `analyze_files` / `compile_files` / `runtime_files`: fall back to
   `tool_files` (the whole SDK) on a toolchain that does not declare them.
-- Analyzer summaries (opt-in): the summary tool is built on `package:analyzer`
-  13.3.0 with the SDK `pkg/linter` vendored at the matching commit. With a
-  newer Dart it may lag the language. It is off by default; plan #17 adds a
-  version check that turns summary mode off, with a warning, when the
-  toolchain's SDK is newer than the analyzer supports.
+- Analyzer summaries (on by default): the summary tool is built on `package:analyzer`
+  13.3.0 with the SDK `pkg/linter` vendored at the matching commit. A version
+  check turns summary mode off when the toolchain's SDK is newer than
+  `ANALYZER_MAX_LANGUAGE_VERSION` (`3.13`).
 - `dart analyze`, `dart format` and `dart fix` run the toolchain SDK's own
   tools, so they always match.
 
@@ -266,17 +238,12 @@ module graph (checked: `bazel mod graph` in `e2e/hello_world` names neither).
 3b0470c; refreshing it needs the Go SDK, which this review's sandbox cannot
 download.
 
-### I. Fail on pub packages without a checksum: accepted (plan #19)
+### I. Fail on pub packages without a checksum: done (plan #19, `e9451d6`)
 
-Confirmed: `pub.from_lock()` passes `desc.get("sha256", "")`, so a hosted
-package without one downloads unverified. Plan: a hosted package with no
-`sha256` fails the fetch; a git package must carry `resolved-ref`. Proposed
-shared error text, for both rule sets:
+`pub.from_lock()` now fails on hosted packages without a non-empty `sha256` and
+git packages without a non-empty `resolved-ref`, using the shared diagnostic:
 
     pub package "<name>" <version> in <lock file> has no sha256. Run `dart pub get` (Dart 2.19 or newer records one) and commit the lock.
-
-If rules_flutter's H0 already has a text, put it in `asks-for-rules-dart.md`
-and rules_dart will use it verbatim.
 
 ### J. Finding the SDK from `dart`: confirmed
 

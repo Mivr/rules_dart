@@ -27,6 +27,11 @@ and CPU totals are the steadier signal. Raw numbers are in `results/`.
 | 14  | `8e2e855`            | Modular fixes: non-standalone libraries compile from source at the entry; duplicate sources detected per library; entry kernel linked first, so the test's own `main` runs                                                              | `ext_exemplar` builds modular; `check_dual_build_collisions_test` passes; outputs reproducible                           |
 | 21  | `8f3b716`            | `pub.package` stands in for its name in every `pub.from_lock` hub and in the deps of locked packages (was dropped)                                                                                                                      | Found by making summaries the default: `e2e/pub_deps` failed to load rules_dart's own tools                              |
 | 17  | `17fab99`            | `//dart:analyzer_summaries` on by default; off automatically for Flutter embedders (`sky_engine` / `_embedder.yaml`), SDKs newer than analyzer 13.3.0's language 3.13, and non-shim `generator_bin`s; split packages and parts fixed    | Lint after a leaf body edit: 61 analyses -> 1, 62 staging copies -> 2, 41.7 s -> 11.7 s; clean lint +4%                  |
+| K   | `99055ee`, `72a7942` | Wrap exported toolchain/tool labels in `Label(...)` across `source_set.bzl`, `dart_kernel.bzl`, `dart_link_hook.bzl`; order `ctx.bin_dir.path` before `.` in `--multi-root` / `--filesystem-root`                                       | Cross-module `assemble_source_dir` & `dart_library` work; generated `.g.dart` shadows stale checked-in source            |
+| 18  | `0f1999b`            | Export `declare_dart_sdk_toolchains` macro in `dart/toolchain.bzl` and `dart/repositories.bzl`                                                                                                                                         | Shared `compile_files` / `runtime_files` / `analyze_files` subsets for downstream SDKs (`prefix = "dart-sdk/"`)          |
+| 19  | `e9451d6`            | `pub.from_lock()` fails on hosted packages without `sha256` and git packages without `resolved-ref` (`pub_lock_package` / `pub_package` reject empty `sha256`)                                                                         | Unpinned hosted or git lock entries rejected at evaluation time                                                          |
+| 17b | `aa0dc5b`            | `//dart:analyzer_summaries` supports Flutter `sky_engine` `lib/_embedder.yaml` (`<name>.embedder_sdk.sum`, `--sdk-summary`) along `_sky_engine`                                                                                        | Flutter targets analyze against per-library summaries instead of falling back to full-closure source analysis            |
+| 16  | `f90efba`            | Export modular kernel helpers (`DartKernelInfo`, `kernel_module_action`, `kernel_link_action`, `//dart:kernel_module`, `//dart:kernel_link`) and parameterize `target`, `platform_dill`, `extra_libraries`, `scheme`                   | Enables modular `.kmod` compilation and `org-dartlang-app:///` stable URIs in `rules_flutter`                            |
 
 Overall: one consolidated run, baseline `3b0470c` then final `main` `b5d9f93`,
 back to back on the same 4-core sandbox (`results/final_base_3b0470c.json`,
@@ -52,9 +57,6 @@ Default flags, so modular compiles are on and analyzer summaries are off.
 | Leaf body edit: format checks re-run  | 61                   | 1                                                              |
 | Leaf body edit: analyses re-run       | 61                   | 61 (1 with `//dart:analyzer_summaries`, measured in `398116c`) |
 
-Every compiled output is byte-identical across clean builds and install paths
-(checked per change; see `findings.md`).
-
 What the numbers leave on the table:
 
 - Since `17fab99` (summaries on by default) a leaf body edit re-runs 1 analysis
@@ -69,13 +71,9 @@ What the numbers leave on the table:
 
 ## Queued (agreed with the user, 2026-10-14)
 
-| #   | Item                                                                                                                                                                                | Depends on |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| 16  | Export modular compilation for rules_flutter: helper with `target`, platform dill, available-libraries list, `scheme`, extra inputs; `kernel_module` / `kernel_link` public (ask A) | #14        |
-| 17b | SDK summary takes an embedder (`_embedder.yaml`, for `dart:ui`), so Flutter targets use summary mode too; today they fall back to source (ask B)                                    | -          |
-| 18  | Macro declaring the SDK filegroups and `dart_toolchain` over a path prefix; test that a root-registered toolchain wins without fetching the default SDK (ask E)                     | —          |
-| 19  | `pub.from_lock()` fails on a hosted package without `sha256` (and a git package without `resolved-ref`), shared error text with rules_flutter (ask I)                               | —          |
-| 20  | Stage main-repository sources for analysis in place, cutting the 122 staging copies of a clean lint (a leaf edit re-runs only 2 since summaries became the default)                 | -          |
+| #   | Item                                                                                                                              | Depends on |
+| --- | --------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 20  | Stage main-repository sources for analysis in place, cutting the 122 staging copies of a clean lint (a leaf edit re-runs only 2) | -          |
 
 ## Dropped
 
