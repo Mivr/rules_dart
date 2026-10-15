@@ -47,7 +47,8 @@ load("//dart/private:dart_info.bzl", "package_lib_prefix")
 # a `File.short_path` already gives, so no path is copied or rewritten to make a
 # generated file reachable.
 
-EXEC_TOOLS_TOOLCHAIN = "//dart:exec_tools_toolchain_type"
+_TOOLCHAIN_TYPE = Label("//dart:toolchain_type")
+EXEC_TOOLS_TOOLCHAIN = Label("//dart:exec_tools_toolchain_type")
 
 DartKernelInfo = provider(
     doc = """A library's module, and the modules its closure links against.
@@ -639,7 +640,7 @@ def modular_executable_tools(
     tools = kernel_tools_for(ctx)
     if tools == None:
         return None
-    target_sdk = ctx.toolchains["//dart:toolchain_type"].dart_sdk_info
+    target_sdk = ctx.toolchains[_TOOLCHAIN_TYPE].dart_sdk_info
 
     kernels = dep_kernels_or_none(ctx.attr.deps)
     dep_modular = kernels != None and all([k.modular for k in kernels])

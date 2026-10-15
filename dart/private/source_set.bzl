@@ -24,9 +24,11 @@ Copies remain where a consumer needs one real directory tree:
 
 load("//dart/private:dart_info.bzl", "derived_package_info")
 
+_COPY_TOOLCHAIN_TYPE = Label("//dart:copy_toolchain_type")
+
 # The toolchain that provides the `copy_tree` tool. Rules that copy files list it
 # here; `dart/utils.bzl` exports the same list for rule sets built on rules_dart.
-COPY_TO_DIRECTORY_TOOLCHAINS = ["//dart:copy_toolchain_type"]
+COPY_TO_DIRECTORY_TOOLCHAINS = [_COPY_TOOLCHAIN_TYPE]
 
 def needs_source_assembly(srcs):
     """Whether `srcs` must be assembled into one directory before compilation.
@@ -100,13 +102,13 @@ def assemble_source_dir(ctx, name, srcs, root_paths = ["."], replace_prefixes = 
     args.add_all(srcs, map_each = _copy_record, expand_directories = True)
 
     ctx.actions.run(
-        executable = ctx.toolchains["//dart:copy_toolchain_type"].copy_tree,
+        executable = ctx.toolchains[_COPY_TOOLCHAIN_TYPE].copy_tree,
         arguments = [args],
         inputs = srcs,
         outputs = [dst],
         mnemonic = "DartCopyTree",
         progress_message = "Copying files to directory %{output}",
-        toolchain = "//dart:copy_toolchain_type",
+        toolchain = _COPY_TOOLCHAIN_TYPE,
     )
     return dst
 
