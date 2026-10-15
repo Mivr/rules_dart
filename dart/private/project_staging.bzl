@@ -86,14 +86,16 @@ def _external_sub_path(lib_root):
     parts = lib_root.split("/")
     return "/".join(parts[2:])
 
-def staged_package_config_content(packages, ext_staged, proj_name, ext_roots = {}, config_dir = ""):
+def staged_package_config_content(packages, ext_staged, proj_name, ext_roots = {}, config_dir = "", main_roots = {}):
     """Builds package_config.json content for the staged-project layout.
 
     The config lives at `<proj_name>.proj/.dart_tool/package_config.json`:
-    main-repo packages resolve to `../src[/<lib_root>]`. An external package
-    named in `ext_roots` resolves to the relative path from the config's
-    directory to its exec-root directory. Every other external package resolves
-    to its copied tree, `../../<proj_name>.extpkgs/<mangled>[/<sub>]`.
+    main-repo packages resolve to `../src[/<lib_root>]`, unless named in
+    `main_roots`, where they resolve to the relative path from the config's
+    directory to their exec-root directory. An external package named in
+    `ext_roots` resolves to the relative path from the config's directory to its
+    exec-root directory. Every other external package resolves to its copied
+    tree, `../../<proj_name>.extpkgs/<mangled>[/<sub>]`.
 
     Args:
       packages: List of DartPackageInfo providers.
@@ -107,6 +109,9 @@ def staged_package_config_content(packages, ext_staged, proj_name, ext_roots = {
         `external_package_placement`). Empty when every package is copied.
       config_dir: The exec-root-relative directory the config is written into;
         the referenced rootUris are relative to it.
+      main_roots: Dict of package_name -> exec-root-relative directory, for the
+        main-repo dependency packages referenced in place (see
+        `main_package_placement`).
 
     Returns:
       String content of the package_config.json file.
@@ -126,6 +131,8 @@ def staged_package_config_content(packages, ext_staged, proj_name, ext_roots = {
                 sub = _external_sub_path(pkg.lib_root)
                 if sub:
                     root_uri += "/" + sub
+        elif pkg.package_name in main_roots:
+            root_uri = relative_path(config_dir, main_roots[pkg.package_name])
         elif pkg.lib_root:
             root_uri = "../src/" + pkg.lib_root
         else:
@@ -248,6 +255,134 @@ def staged_pubspec_paths(packages):
         for lib_root, _ in main_package_roots(packages)
     ]
 
+def _is_under(short_path, root):
+    if root == "":
+        return True
+    return short_path == root or short_path.startswith(root + "/")
+
+def _owning_package_root(short_path, sorted_roots):
+    """Returns the longest `lib_root` in `sorted_roots` (sorted longest-first) containing `short_path`, or None."""
+    for root in sorted_roots:
+        if _is_under(short_path, root):
+            return root
+    return None
+
+def _is_external_pkg(pkg):
+    return pkg.lib_root.startswith("../") or getattr(pkg, "workspace_root", "") != ""
+
+def _is_external_file(f):
+    if f.short_path.startswith("../"):
+        return True
+    owner = getattr(f, "owner", None)
+    if owner != None and getattr(owner, "workspace_root", "") != "":
+        return True
+    return False
+
+def main_package_placement(packages, all_srcs, own = None, options_files = None):
+    """Decides per main-repo package whether to reference it in place or stage under `src/`.
+
+    Args:
+      packages: List of `DartPackageInfo` providers.
+      all_srcs: List of `File` objects.
+      own: Optional collection (list of `File`s or dict `{short_path: File}`) of
+        the target's own sources. When `None`, all main-repo files are staged
+        under `src/`.
+      options_files: Optional list of `File` objects (e.g. `analysis_options.yaml`)
+        that must always be staged under `src/` so upward walks find them.
+
+    Returns:
+      struct(
+        main_roots: dict of package_name -> exec-root-relative directory for
+          main-repo packages referenced in place,
+        src_files: list of main-repo `File`s to stage under `src/`,
+        in_place_files: list of main-repo `File`s referenced in place,
+      )
+    """
+    main_files = [
+        f
+        for f in all_srcs
+        if not _is_external_file(f)
+    ]
+    if own == None:
+        return struct(
+            main_roots = {},
+            src_files = main_files,
+            in_place_files = [],
+        )
+
+    if type(own) == "dict":
+        own_short_paths = [
+            v.short_path if hasattr(v, "short_path") else k
+            for k, v in own.items()
+        ]
+    else:
+        own_short_paths = [
+            f.short_path if hasattr(f, "short_path") else f
+            for f in own
+        ]
+
+    options_paths = {f.short_path: True for f in (options_files or [])}
+    pkgs_by_root = {}
+    for pkg in packages:
+        if _is_external_pkg(pkg) or not pkg.package_name:
+            continue
+        pkgs_by_root.setdefault(pkg.lib_root, []).append(pkg)
+
+    # Sort lib_roots longest-first so nested packages match their deepest owning package.
+    sorted_roots = sorted(pkgs_by_root.keys(), key = lambda r: len(r), reverse = True)
+
+    # Any package that contains an `own` file (plus the root package `""`) must stay
+    # staged under `src/` so `own` files and same-package `lib/` files share a single
+    # `rootUri` in `package_config.json` and relative `../` imports within the package work.
+    own_roots = {"": True}
+    for sp in own_short_paths:
+        owner_root = _owning_package_root(sp, sorted_roots)
+        if owner_root != None:
+            own_roots[owner_root] = True
+
+    by_root = {r: [] for r in pkgs_by_root.keys()}
+    always_src = []
+    for f in main_files:
+        if f.short_path in options_paths:
+            always_src.append(f)
+            continue
+        owner_root = _owning_package_root(f.short_path, sorted_roots)
+        if owner_root == None or owner_root in own_roots:
+            always_src.append(f)
+        else:
+            by_root[owner_root].append(f)
+
+    main_roots = {}
+    src_files = list(always_src)
+    in_place_files = []
+    for root, root_pkgs in pkgs_by_root.items():
+        if root in own_roots:
+            continue
+        pfiles = by_root[root]
+        if not pfiles:
+            continue
+        dirs = {}
+        for f in pfiles:
+            d = package_exec_root(f, root)
+            if d != None:
+                dirs[d] = True
+            else:
+                dirs[""] = True
+                dirs["__unmatched__"] = True
+        if len(dirs) == 1:
+            single_dir = dirs.keys()[0]
+            for pkg in root_pkgs:
+                main_roots[pkg.package_name] = single_dir
+            in_place_files.extend(pfiles)
+        else:
+            src_files.extend(pfiles)
+
+    return struct(
+        main_roots = main_roots,
+        src_files = src_files,
+        in_place_files = in_place_files,
+    )
+
 def external_package_placement(ext_pkgs, ext_files_by_pkg):
     """Decides, for each external package, whether it is referenced in place or copied.
 
@@ -288,7 +423,17 @@ def external_package_placement(ext_pkgs, ext_files_by_pkg):
             copied.append(pkg_name)
     return struct(roots = roots, copied = copied)
 
-def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = None, sdk_version = "", copy_external = True, all_packages_named = False):
+def stage_dart_project(
+        ctx,
+        packages,
+        all_srcs,
+        extra_proj_files = {},
+        name = None,
+        sdk_version = "",
+        copy_external = True,
+        all_packages_named = False,
+        own = None,
+        options_files = None):
     """Stages packages and sources into a hermetic Dart project layout.
 
     Args:
@@ -317,22 +462,27 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
         files the project reads; the analyzer resolves its libraries from
         summaries instead. Default False: the config names only what is
         staged, as before.
+      own: Optional collection of the target's own files, forwarded to
+        `main_package_placement` when `copy_external` is False.
+      options_files: Optional list of `analysis_options.yaml` Files that must
+        always be staged under `src/`.
 
     Returns:
       struct(
         proj_path: exec path of the `<name>.proj` directory,
-        src_tree: the `src` tree artifact File,
+        src_tree: the `src` tree artifact File (or struct with `path` and `dirname`),
         package_config: the written package_config File,
         proj_files: dict of `extra_proj_files` name -> the File written,
+        src_files: list of main-repo Files staged under `src/`,
+        stub_paths: list of `src/...` stub `pubspec.yaml` paths written,
         inputs: list of Files to add to the consuming action's inputs: the
-          copied trees, the config, and the files of the packages referenced
-          in place (which the config names directly).
+          staged links/trees, the config, and the files of the packages
+          referenced in place (which the config names directly).
       )
     """
     name = name or ctx.label.name
 
     ext_pkgs = [p for p in packages if p.lib_root.startswith("../")]
-    main_files = []
     ext_files_by_pkg = {}
     ext_index = package_index(ext_pkgs)
     for f in all_srcs:
@@ -342,40 +492,90 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
             owner = package_for_index(f.short_path, ext_index)
             if owner != None:
                 ext_files_by_pkg.setdefault(owner, []).append(f)
-        else:
-            main_files.append(f)
 
-    # One stub pubspec per main-repo package root (see the module docstring
-    # for why lints need it). The stubs cannot be declared at their final
-    # paths — `<name>.proj/src` is a tree artifact, and Bazel rejects declared
-    # files under a declared directory — so each is written to a sibling
-    # `.pkgstubs` staging spot and mapped into place by the same
-    # copy that assembles the tree.
-    stub_files = []
-    replace_prefixes = {}
-    for lib_root, package_name in main_package_roots(packages):
-        stub = ctx.actions.declare_file("{}.pkgstubs/{}/pubspec.yaml".format(
-            name,
-            mangle_package_dir(lib_root) if lib_root else "_root",
-        ))
-        ctx.actions.write(stub, pubspec_stub(packages, name = package_name, sdk_version = sdk_version))
-
-        # Key on the stub's workspace-relative directory: with `root_paths=[]`
-        # that is exactly the path prefix it would keep inside the tree.
-        replace_prefixes[stub.short_path.rsplit("/", 1)[0]] = lib_root
-        stub_files.append(stub)
-
-    src_tree = assemble_source_dir(
-        ctx,
-        name + ".proj/src",
-        main_files + stub_files,
-        # Keep workspace-relative paths: each package's lib_root must be a
-        # real directory under src/ for the rootUris above to hold.
-        root_paths = [],
-        replace_prefixes = replace_prefixes,
+    main_place = main_package_placement(
+        packages,
+        all_srcs,
+        own = own if not copy_external else None,
+        options_files = options_files,
     )
 
-    inputs = [src_tree]
+    package_config = ctx.actions.declare_file(name + ".proj/.dart_tool/package_config.json")
+    config_dir = package_config.dirname
+    proj_path = config_dir.rpartition("/")[0]
+
+    # Only generate stub pubspec.yaml files for main-repo packages that actually
+    # have at least one file staged under `src/`.
+    all_roots = dict(main_package_roots(packages))
+    sorted_all_roots = sorted(all_roots.keys(), key = lambda r: len(r), reverse = True)
+    active_roots = {}
+    for f in main_place.src_files:
+        owner_root = _owning_package_root(f.short_path, sorted_all_roots)
+        if owner_root != None:
+            active_roots[owner_root] = all_roots[owner_root]
+
+    existing_short_paths = {f.short_path: True for f in main_place.src_files}
+    active_stubs = []
+    stub_paths = []
+    for lib_root, package_name in sorted(active_roots.items()):
+        rel_path = ("%s/pubspec.yaml" % lib_root) if lib_root else "pubspec.yaml"
+        if rel_path not in existing_short_paths:
+            active_stubs.append((lib_root, package_name, rel_path))
+            stub_paths.append("src/" + rel_path)
+
+    has_dir_inputs = any([getattr(f, "is_directory", False) for f in main_place.src_files])
+
+    if not copy_external and not has_dir_inputs:
+        staged_links = []
+        occupied = {}
+        for _, package_name, rel_path in active_stubs:
+            stub = ctx.actions.declare_file(name + ".proj/src/" + rel_path)
+            ctx.actions.write(
+                output = stub,
+                content = pubspec_stub(packages, name = package_name, sdk_version = sdk_version),
+            )
+            staged_links.append(stub)
+            occupied[rel_path] = True
+
+        for f in main_place.src_files:
+            if f.short_path in occupied:
+                continue
+            occupied[f.short_path] = True
+            link = ctx.actions.declare_file(name + ".proj/src/" + f.short_path)
+            ctx.actions.symlink(output = link, target_file = f)
+            staged_links.append(link)
+
+        src_tree = struct(
+            path = proj_path + "/src",
+            dirname = proj_path,
+        )
+        inputs = staged_links + main_place.src_files + main_place.in_place_files
+    else:
+        stub_files = []
+        replace_prefixes = {}
+        for lib_root, package_name, _ in active_stubs:
+            stub = ctx.actions.declare_file("{}.pkgstubs/{}/pubspec.yaml".format(
+                name,
+                mangle_package_dir(lib_root) if lib_root else "_root",
+            ))
+            ctx.actions.write(stub, pubspec_stub(packages, name = package_name, sdk_version = sdk_version))
+
+            # Key on the stub's workspace-relative directory: with `root_paths=[]`
+            # that is exactly the path prefix it would keep inside the tree.
+            replace_prefixes[stub.short_path.rsplit("/", 1)[0]] = lib_root
+            stub_files.append(stub)
+
+        src_tree = assemble_source_dir(
+            ctx,
+            name + ".proj/src",
+            main_place.src_files + stub_files,
+            # Keep workspace-relative paths: each package's lib_root must be a
+            # real directory under src/ for the rootUris above to hold.
+            root_paths = [],
+            replace_prefixes = replace_prefixes,
+        )
+        inputs = [src_tree] + main_place.in_place_files
+
     ext_staged = {pkg_name: True for pkg_name in ext_files_by_pkg}
 
     # Referenced in place where possible; copied otherwise (see the helper).
@@ -409,7 +609,6 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
         else:
             inputs.extend(files)
 
-    package_config = ctx.actions.declare_file(name + ".proj/.dart_tool/package_config.json")
     ctx.actions.write(
         output = package_config,
         content = staged_package_config_content(
@@ -417,7 +616,8 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
             ext_staged,
             name,
             ext_roots = ext_roots,
-            config_dir = package_config.dirname,
+            config_dir = config_dir,
+            main_roots = main_place.main_roots,
         ),
     )
     inputs.append(package_config)
@@ -430,9 +630,11 @@ def stage_dart_project(ctx, packages, all_srcs, extra_proj_files = {}, name = No
         proj_files[filename] = extra
 
     return struct(
-        proj_path = src_tree.dirname,
+        proj_path = proj_path,
         src_tree = src_tree,
         package_config = package_config,
         proj_files = proj_files,
+        src_files = main_place.src_files,
+        stub_paths = stub_paths,
         inputs = inputs,
     )

@@ -71,7 +71,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//dart:providers.bzl", "DartAnalysisOptionsInfo", "DartAnalyzableInfo", "DartInfo")
 load("//dart/private:common.bzl", "merge_package_records", "own_package_record", "writable_home_env")
 load("//dart/private:dart_analyzer_summary.bzl", "CONFLICT_PREFIX", "DartAnalyzerSummaryInfo", "analyzer_summaries_supported", "closure_attrs", "dart_analyzer_summary", "own_lib_sources", "package_key", "sdk_root_path", "unbacked_embedder_in_closure")
-load("//dart/private:project_staging.bzl", "pubspec_stub", "stage_dart_project", "staged_pubspec_paths")
+load("//dart/private:project_staging.bzl", "pubspec_stub", "stage_dart_project")
 load("//dart/private:source_set.bzl", "COPY_TO_DIRECTORY_TOOLCHAINS")
 
 # Analysis and formatting run on the build machine and produce nothing for the
@@ -232,6 +232,21 @@ def stage_config_project(ctx, config, packages, files, own, name, sdk_version, c
     own_paths = [f.short_path for f in own]
     own_set = {f.path: True for f in own}
 
+    staged = stage_dart_project(
+        ctx,
+        packages,
+        staged_files,
+        extra_proj_files = {
+            "pubspec.yaml": pubspec_stub(packages, sdk_version = sdk_version),
+        },
+        name = name,
+        sdk_version = sdk_version,
+        copy_external = copy_external,
+        all_packages_named = all_packages_named,
+        own = own if not copy_external else None,
+        options_files = config.options_files,
+    )
+
     # Everything else under `src/` is there to resolve against, and excluded —
     # except the options files above one of the own files. Their own
     # diagnostics (an `include:` that does not resolve, an unknown lint)
@@ -242,25 +257,17 @@ def stage_config_project(ctx, config, packages, files, own, name, sdk_version, c
         if [p for p in own_paths if _is_under(p, f.short_path.rpartition("/")[0])]
     }
     excluded = {}
-    for f in staged_files:
+    for f in staged.src_files:
         if f.short_path.startswith("../") or f.path in own_set or f.path in governing:
             continue
         excluded["src/" + f.short_path] = True
-    excluded = sorted(excluded.keys()) + staged_pubspec_paths(packages)
+    excluded = sorted(excluded.keys()) + staged.stub_paths
 
-    return stage_dart_project(
-        ctx,
-        packages,
-        staged_files,
-        extra_proj_files = {
-            "pubspec.yaml": pubspec_stub(packages, sdk_version = sdk_version),
-            _OPTIONS_BASENAME: _wrapper_options(excluded),
-        },
-        name = name,
-        sdk_version = sdk_version,
-        copy_external = copy_external,
-        all_packages_named = all_packages_named,
-    )
+    options_file = ctx.actions.declare_file(name + ".proj/" + _OPTIONS_BASENAME)
+    ctx.actions.write(output = options_file, content = _wrapper_options(excluded))
+    staged.inputs.append(options_file)
+    staged.proj_files[_OPTIONS_BASENAME] = options_file
+    return staged
 
 def _analyze(ctx, name, staged, sdk_inputs):
     """Declares the `dart analyze` action; returns the stamp it writes on success."""
