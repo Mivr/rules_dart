@@ -38,6 +38,8 @@ Two checks were added to that list after something slipped through:
 
 ## Status: concluded 2026-10-15, released as v0.8.0
 
+Release notes and known issues: [`release-v0.8.0.md`](release-v0.8.0.md).
+
 The review's changes are on `main` and tagged `v0.8.0` on `Mivr/rules_dart` (the
 0.7.2 release is exactly `3b0470c`, the review's baseline, so v0.8.0 is this
 review). The tag is on the fork only: this environment cannot reach
