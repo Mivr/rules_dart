@@ -249,14 +249,15 @@ whichever `//dart:toolchain_type` is resolved and needs nothing from you).
 
 Agreed. rules_dart bumps when the user schedules it, with a lock refresh.
 
-### H. `bazel_lib`: done (`84c8767`, `5387726`)
+### H. `bazel_lib`: done (`84c8767`, `5387726`, `44ee436`)
 
 `84c8767` (copy staged sources with a Dart tool, drop `bazel_lib`) and
-`5387726` (parse pubspec files without `yaml.bzl`) are on `main`.
+`5387726` (parse pubspec files without `yaml.bzl`) are on `main`, and `44ee436`
+wraps the copy toolchain label in `Label(...)` for cross-module callers (see K).
 `COPY_TO_DIRECTORY_TOOLCHAINS` keeps its name and now lists
-`//dart:copy_toolchain_type`, which rules_dart registers itself, so
+`Label("//dart:copy_toolchain_type")`, which rules_dart registers itself, so
 `flutter_test` needs no change and rules_flutter can drop `bazel_lib` in the
-same release. With both commits, `bazel_lib` and `yaml.bzl` leave a downstream
+same release. With these commits, `bazel_lib` and `yaml.bzl` leave a downstream
 module graph (checked: `bazel mod graph` in `e2e/hello_world` names neither).
 `e2e/gazelle`'s lock has carried a stale `pub` extension digest since before
 3b0470c; refreshing it needs the Go SDK, which this review's sandbox cannot
@@ -282,9 +283,24 @@ Every SDK path is derived from `DartSdkInfo.dart`: `sdk_path_from_dart` in
 paths from `sdk_root`'s repository root. rules_dart will keep that contract and
 note any change here first.
 
-### `bazel_lib` and `yaml.bzl` are gone (`84c8767`, `5387726`)
+### K. Toolchain labels in exported helpers: done (`44ee436`)
 
-- `COPY_TO_DIRECTORY_TOOLCHAINS` now lists `//dart:copy_toolchain_type`,
+`dart/private/source_set.bzl` now defines
+`_COPY_TOOLCHAIN_TYPE = Label("//dart:copy_toolchain_type")` and uses it in
+`COPY_TO_DIRECTORY_TOOLCHAINS`, `ctx.toolchains[_COPY_TOOLCHAIN_TYPE]`, and
+`ctx.actions.run(toolchain = _COPY_TOOLCHAIN_TYPE)` inside
+`assemble_source_dir`. `dart/private/dart_kernel.bzl` likewise wraps
+`EXEC_TOOLS_TOOLCHAIN = Label("//dart:exec_tools_toolchain_type")` and
+`_TOOLCHAIN_TYPE = Label("//dart:toolchain_type")` (used in
+`MODULAR_KERNEL_TOOLCHAINS`, `kernel_tools_for`, and `modular_executable_tools`),
+and `dart/private/dart_link_hook.bzl` wraps `link_hook_runner_attr()`'s default
+in `Label("//dart/private/tools:link_hook_runner")`. Verified from an external
+module (`e2e/codegen` `//source_set_pkg:colocated_test`) and against
+`rules_flutter` (`bazel test //... --override_module=rules_dart=...`).
+
+### `bazel_lib` and `yaml.bzl` are gone (`84c8767`, `5387726`, `44ee436`)
+
+- `COPY_TO_DIRECTORY_TOOLCHAINS` now lists `Label("//dart:copy_toolchain_type")`,
   registered by rules_dart (`register_toolchains("//dart:copy_toolchain")`).
   The copy tool is `//dart/private/tools:copy_tree` (mnemonic `DartCopyTree`),
   byte-identical output to `copy_to_directory`'s for the options rules_dart uses.
