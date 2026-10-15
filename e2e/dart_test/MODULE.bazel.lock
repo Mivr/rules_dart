@@ -249,7 +249,7 @@
     },
     "@@rules_dart+//dart/pub:extensions.bzl%pub": {
       "general": {
-        "bzlTransitiveDigest": "57hbcGJjgzTzYGGmCNfIQ/+yUxGAQBx4f2yy6rJqJzg=",
+        "bzlTransitiveDigest": "RcwajrtzRmcVtjWzSNJy7WpOHu5gfTlVSqCAqbnSli4=",
         "usagesDigest": "HhXgbUFWfioglI/IKO7ksu/+eJ+CrHyYiWVAwJH/kc8=",
         "recordedInputs": [
           "FILE:@@rules_dart+//dart/ext/pubspec.lock 72d6a1ef1992d78fb7055b2d4cc4f489cfefac66ed87d50b15688731e54e6e7f"
