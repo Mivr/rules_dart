@@ -59,7 +59,7 @@ cost is amortised across the worker's lifetime.
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//dart:providers.bzl", "DartInfo", "DartPackageMetadataInfo")
+load("//dart:providers.bzl", "DartAnalyzableInfo", "DartInfo", "DartPackageMetadataInfo")
 load(
     "//dart/private:common.bzl",
     "DEFAULT_ROOT_LANGUAGE_VERSION",
@@ -71,7 +71,39 @@ load(
     "same_package_library_dep_files",
     "synth_package_config",
 )
-load(":dart_analyzer_summary.bzl", "DartAnalyzerSummaryInfo", "dart_analyzer_summary")
+load(
+    ":dart_analyzer_summary.bzl",
+    "DartAnalyzerSummaryInfo",
+    "analyzer_summaries_supported",
+    "dart_analyzer_summary",
+    "embedder_in_closure",
+)
+
+# The shim library every `dart/ext` shim binary is built on. A generator whose
+# closure holds it parses the `--summary` and `--sdk-summary` flags; a generator
+# that does not may reject them as unknown.
+_BUILDER_SHIM_SOURCE = "dart/ext/lib/builder_shim.dart"
+
+def is_builder_shim_generator(generator):
+    """Returns whether a `generator_bin` is built on the rules_dart builder shim.
+
+    The shim's source is in the executable's closure. That is the one fact that
+    says the binary parses the summary flags, whatever its own sources are, and
+    it holds for every `dart/ext` shim and for a user binary that uses the shim
+    library directly. A binary with no Dart closure (a Go or C++ tool) is not.
+
+    Args:
+      generator: The `generator_bin` target.
+
+    Returns:
+      A bool.
+    """
+    if DartAnalyzableInfo not in generator:
+        return False
+    for f in generator[DartAnalyzableInfo].dart_info.transitive_srcs.to_list():
+        if f.short_path == _BUILDER_SHIM_SOURCE or f.short_path.endswith("/" + _BUILDER_SHIM_SOURCE):
+            return True
+    return False
 
 def analyzer_summary_inputs(ctx, package_name):
     """Returns the analyzer summaries a `generator_bin` shim resolves `deps` against.
@@ -80,17 +112,35 @@ def analyzer_summary_inputs(ctx, package_name):
     outside `package_name` from their summaries, not from source. Same-package
     libraries stay sources, since they are the files the builder reads.
 
+    Summaries are passed only when all of these hold, and the command line is
+    otherwise unchanged:
+
+      - the flag is on, and the exec SDK is no newer than the pinned analyzer
+        supports (`analyzer_summaries_supported`);
+      - the generator is built on the builder shim (`is_builder_shim_generator`),
+        so it accepts the flags. A user's own generator never sees them;
+      - no dependency's closure holds a Flutter embedder, whose `dart:ui` a
+        summary cannot resolve. Such a closure is analyzed from source, as it
+        was before the flag existed.
+
     Args:
       ctx: The `dart_codegen` rule context.
       package_name: The package owning `src`.
 
     Returns:
       A pair `(summaries, sdk_summary)`: the `File`s to pass as `--summary`, and
-      the SDK summary to pass as `--sdk-summary`. Both are empty when the flag
-      is off, so the command line is unchanged.
+      the SDK summary to pass as `--sdk-summary`. Both are empty when no
+      summaries are passed.
     """
     if not ctx.attr._analyzer_summaries[BuildSettingInfo].value:
         return [], None
+    if not analyzer_summaries_supported(ctx.toolchains["//dart:exec_tools_toolchain_type"].dart_sdk_info.version):
+        return [], None
+    if not is_builder_shim_generator(ctx.attr.generator_bin):
+        return [], None
+    for d in ctx.attr.deps:
+        if DartInfo in d and embedder_in_closure(d[DartInfo]):
+            return [], None
     packaged = depset(transitive = [
         d[DartAnalyzerSummaryInfo].packaged_summaries
         for d in ctx.attr.deps

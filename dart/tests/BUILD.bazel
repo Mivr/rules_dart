@@ -1,4 +1,5 @@
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load(":analyzer_summary_test.bzl", "analyzer_summary_test_suite")
 load(":code_asset_test.bzl", "code_asset_test_suite")
 load(":codegen_test.bzl", "codegen_test_suite")
 load(":common_test.bzl", "common_test_suite")
@@ -63,6 +64,8 @@ library_test_suite(name = "library_test")
 link_hook_test_suite(name = "link_hook_test")
 
 semver_test_suite(name = "semver_test")
+
+analyzer_summary_test_suite(name = "analyzer_summary_version_test")
 
 provider_shape_probe(
     name = "provider_shape_probe_target",

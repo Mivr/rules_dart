@@ -511,18 +511,32 @@ bazel build //:fix --output_groups=+dart_fix_manifest  # what was fixed, and wha
 bazel build //:fix --output_groups=+dart_fix_fixes     # the fixed files themselves
 ```
 
-#### Analyzer summaries (opt-in)
+#### Analyzer summaries
 
-`--@rules_dart//dart:analyzer_summaries=true` changes how `dart_analyze` checks a
-target. Each dependency is summarized once, as its declarations without function
-bodies, and the target is checked against those summaries rather than against
-its dependencies' source. The check is faster, and a body edit in a library no
-longer re-checks the libraries above it. Turn it on in `.bazelrc`:
+`dart_analyze` checks each target against summaries of its dependencies, on by
+default. Each dependency is summarized once, as its declarations without
+function bodies, and the target is checked against those summaries rather than
+against its dependencies' source. The check is faster, and a body edit in a
+library no longer re-checks the libraries above it.
+
+To analyze from source, as `dart analyze` runs, turn it off in `.bazelrc`:
 
 ```
 # .bazelrc
-common --@rules_dart//dart:analyzer_summaries=true
+common --@rules_dart//dart:analyzer_summaries=false
 ```
+
+A target is checked from source whatever the flag says in these cases, since
+summaries cannot give it the same answer:
+
+- Its closure holds a Flutter embedder: a package named `sky_engine`, or a
+  `lib/_embedder.yaml`. A summary cannot resolve `dart:ui`.
+- The toolchain's Dart SDK is newer than the pinned analyzer supports. The bound
+  is `ANALYZER_MAX_LANGUAGE_VERSION` in `dart/private/dart_analyzer_summary.bzl`.
+- A dependency has no summary, such as an opaque `srcs_dir` library.
+
+`dart_codegen` passes the summaries only to generators built on rules_dart's
+builder shim. A generator of your own gets the command line it always had.
 
 The trade-off: the diagnostics come from rules_dart's pinned `package:analyzer`
 (13.3.0), not from the SDK's `dart analyze`, so they can differ from the IDE's.

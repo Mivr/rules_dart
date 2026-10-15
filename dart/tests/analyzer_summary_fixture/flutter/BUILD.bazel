@@ -1,0 +1,17 @@
+load("//dart:defs.bzl", "dart_library")
+
+# Stands in for Flutter's `sky_engine`. Its `lib/_embedder.yaml` gives `dart:ui`,
+# which the Dart SDK does not have, so a closure holding this package is analyzed
+# from source. See dart/private/dart_analyzer_summary.bzl (`embedder_in_closure`).
+dart_library(
+    name = "sky_engine",
+    package_name = "sky_engine",
+    srcs = [
+        "lib/async.dart",
+        "lib/core.dart",
+        "lib/ui.dart",
+    ],
+    resources = ["lib/_embedder.yaml"],
+    language_version = "3.11",
+    visibility = ["//visibility:public"],
+)

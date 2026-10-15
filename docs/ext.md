@@ -86,15 +86,23 @@ All shim CLIs share this contract (`dart/ext/lib/builder_shim.dart:ShimArgs.pars
 --sdk-path <dir>                         Dart SDK root for the analyzer.
 --summary <path>                         Analyzer summary of a dependency library
                                          outside the input's package. Repeatable.
-                                         Under `//dart:analyzer_summaries` only.
+                                         Under `//dart:analyzer_summaries` only,
+                                         and only for builder-shim generators.
 --sdk-summary <path>                     Analyzer summary of the SDK's libraries.
                                          With any `--summary`, the analyzer reads
                                          its libraries from summaries, not source.
 [--persistent_worker]                    Switches to bazel_worker protocol.
 ```
 
-With `//dart:analyzer_summaries` on, `dart_codegen` passes the summaries of
-its `deps` that are outside `package_name`; same-package sources stay sources.
+`//dart:analyzer_summaries` is on by default. With it on, `dart_codegen` passes
+the summaries of its `deps` that are outside `package_name`; same-package
+sources stay sources. It passes them only to a `generator_bin` whose closure
+holds `dart/ext/lib/builder_shim.dart`, since any other binary may reject the
+flags. It passes none when a dependency holds a Flutter embedder, or when the
+exec SDK is newer than the pinned analyzer supports. Turn the flag off with
+`--@rules_dart//dart:analyzer_summaries=false` to pass no summaries to any
+generator.
+
 Under that flag a shim does not dispose its analyzer collection: on analyzer
 13.3 a dispose of a summary-linked driver throws inside the analyzer's
 scheduler and ends the worker.

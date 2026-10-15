@@ -1,5 +1,5 @@
 // Build-action runner for the analyzer-summary mode of the `dart_analyze`
-// aspect, which `//dart:analyzer_summaries` turns on.
+// aspect, which `//dart:analyzer_summaries` selects (on by default).
 //
 // `summarize` writes one package's summary: `package:analyzer`'s bundle of the
 // libraries its own sources declare, linked against the summaries of its
@@ -13,6 +13,8 @@ import 'dart:io';
 import 'package:analyzer/dart/analysis/analysis_context.dart';
 import 'package:analyzer/dart/analysis/analysis_options.dart';
 import 'package:analyzer/dart/analysis/results.dart';
+import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/sdk/build_sdk_summary.dart';
 import 'package:analyzer/diagnostic/diagnostic.dart';
 import 'package:analyzer/error/error.dart';
@@ -77,7 +79,9 @@ Future<int> _sdk(_Args args) async {
 /// Writes the summary of one package's libraries.
 ///
 /// `--source` and `--uri` pair up in order: the i-th source is the library at
-/// the i-th `package:` URI.
+/// the i-th `package:` URI. A `part` file is staged with the others, so its
+/// library resolves it, but it is not a library and has no URI in the bundle:
+/// naming it as one fails the bundle with "Missing library".
 Future<int> _summarize(_Args args) async {
   final sources = args.all('source');
   final uris = args.all('uri');
@@ -86,6 +90,10 @@ Future<int> _summarize(_Args args) async {
       'summarize needs a --source for each --uri, and at least one of each',
     );
   }
+  final libraryUris = <String>[
+    for (var i = 0; i < sources.length; i++)
+      if (!_isPart(sources[i])) uris[i],
+  ];
   final collection = AnalysisContextCollectionImpl(
     includedPaths: [for (final s in sources) p.absolute(s)],
     sdkPath: p.absolute(args.single('sdk')),
@@ -94,7 +102,7 @@ Future<int> _summarize(_Args args) async {
   );
   final driver = collection.contexts.single.driver;
   final bytes = await driver.buildPackageBundle(
-    uriList: [for (final u in uris) Uri.parse(u)],
+    uriList: [for (final u in libraryUris) Uri.parse(u)],
   );
   // The collection is not disposed. On analyzer 13.3.0, `dispose` after a
   // summary build threw "Expected to link dart:core and dart:async first". On
@@ -102,6 +110,16 @@ Future<int> _summarize(_Args args) async {
   // the process exits straight after, so there is nothing to release.
   File(args.single('out')).writeAsBytesSync(bytes);
   return 0;
+}
+
+/// Whether the Dart file at [path] is a `part` of a library, rather than one.
+bool _isPart(String path) {
+  final unit = parseString(
+    content: File(path).readAsStringSync(),
+    path: path,
+    throwIfDiagnostics: false,
+  ).unit;
+  return unit.directives.any((d) => d is PartOfDirective);
 }
 
 /// Checks a staged project's own files, and writes the stamp if they pass.

@@ -53,11 +53,14 @@ asked for. `dart_fix` applies the aspect to its `target` and writes those
 products into the workspace, so a fix and the analysis it answers can never see
 different projects.
 
-With `//dart:analyzer_summaries` on, the analysis action changes and nothing
-else does. It stages only the target's own files and checks them with
+With `//dart:analyzer_summaries` on (the default), the analysis action changes
+and nothing else does. It stages only the target's own files and checks them with
 `analyzer_summary analyze` against the summaries of its dependencies, which
-`dart_analyzer_summary` builds (see that file). A target whose dependency lacks
-a summary, or the flag being off, keeps the staged closure and `dart analyze`.
+`dart_analyzer_summary` builds (see that file). A target keeps the staged closure
+and `dart analyze` when its flag is off, when the analyzing SDK is newer than the
+pinned analyzer supports, when its closure holds a Flutter embedder
+(`sky_engine`, or a `lib/_embedder.yaml`), or when a dependency lacks a summary.
+`DartAnalysisModeInfo` says which mode a target was checked in.
 The format check and the fix action are the same in both modes. In this mode
 the diagnostics come from the pinned `package:analyzer` with the SDK linter
 vendored in `//third_party/dart_linter`, so they can drift from `dart analyze`
@@ -67,7 +70,7 @@ vendored in `//third_party/dart_linter`, so they can drift from `dart analyze`
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//dart:providers.bzl", "DartAnalysisOptionsInfo", "DartAnalyzableInfo", "DartInfo")
 load("//dart/private:common.bzl", "merge_package_records", "own_package_record", "writable_home_env")
-load("//dart/private:dart_analyzer_summary.bzl", "DartAnalyzerSummaryInfo", "closure_attrs", "dart_analyzer_summary", "package_key", "sdk_root_path")
+load("//dart/private:dart_analyzer_summary.bzl", "CONFLICT_PREFIX", "DartAnalyzerSummaryInfo", "analyzer_summaries_supported", "closure_attrs", "dart_analyzer_summary", "embedder_in_closure", "own_lib_sources", "package_key", "sdk_root_path")
 load("//dart/private:project_staging.bzl", "pubspec_stub", "stage_dart_project", "staged_pubspec_paths")
 load("//dart/private:source_set.bzl", "COPY_TO_DIRECTORY_TOOLCHAINS")
 
@@ -93,6 +96,13 @@ DartAnalysisConfigInfo = provider(
         "options_files": "list[File]: every listed `analysis_options.yaml`, staged at its workspace path.",
         "packages": "list[DartPackageInfo]: packages the listed files `include:` by `package:` URI.",
         "files": "list[File]: those packages' sources and resources, staged for resolution only.",
+    },
+)
+
+DartAnalysisModeInfo = provider(
+    doc = "How the `dart_analyze` aspect checked one target: against its dependencies' summaries, or from their source.",
+    fields = {
+        "summaries": "bool: True when the analysis read dependency summaries. False when it analyzed the staged closure from source, or did not analyze the target.",
     },
 )
 
@@ -299,27 +309,44 @@ def _analyze_summaries(ctx, name, staged, summaries, sdk_inputs):
     )
     return stamp
 
-def _summaries_ready(ctx, info):
-    """Whether every package in the target's closure, but its own, has a summary.
+def _summaries_ready(ctx, info, has_own_lib):
+    """Whether the target can be analyzed from summaries.
 
-    Each target's summary provider names the packages its summaries cover, so
-    a package the summary aspect never reached, one a rule keeps outside `deps`
-    and `library`, is absent from them. The target then analyzes from source,
-    which is slower and never wrong.
+    That is so when every package in its closure, but its own, has a summary,
+    and its closure holds no Flutter embedder. Each target's summary provider
+    names the packages its summaries cover, so a package the summary aspect
+    never reached, one a rule keeps outside `deps` and `library`, is absent from
+    them. The target then analyzes from source, which is slower and never wrong.
+    An embedder's `dart:ui` is not in any summary, so a closure holding one
+    analyzes from source even when every package is covered, its own included.
 
     Args:
       ctx: The aspect context.
       info: The target's `DartInfo` closure.
+      has_own_lib: Whether the target stages `lib/` files of its own package.
 
     Returns:
-      True when every package the closure needs is summarized.
+      True when the closure can be analyzed from summaries.
     """
+    if embedder_in_closure(info):
+        return False
     covered = {}
     for d in closure_attrs(ctx):
         if DartAnalyzerSummaryInfo in d:
             for key in d[DartAnalyzerSummaryInfo].packages.to_list():
                 covered[key] = True
     own = package_key(info)
+
+    # A package split across targets is analyzed from source when the target
+    # stages `lib/` files of its own: a dependency's summary defines libraries
+    # those files define too (see `dart_analyzer_summary`). A test or an
+    # executable under `test/` or `bin/` stages none, and resolves `package:`
+    # imports of its own package from the dependency's summary.
+    if own in covered and has_own_lib:
+        return False
+    for key in covered.keys():
+        if key.startswith(CONFLICT_PREFIX):
+            return False
     for pkg in info.transitive_packages.to_list():
         key = package_key(pkg)
         if key != own and key not in covered:
@@ -477,8 +504,13 @@ def _dart_analyze_aspect_impl(target, ctx):
 
     tags = getattr(ctx.rule.attr, "tags", [])
     groups = {}
+    summary_mode = False
     if NO_ANALYZE_TAG not in tags:
-        if ctx.attr._summaries[BuildSettingInfo].value and _summaries_ready(ctx, info):
+        # The SDK check is the analyzing toolchain's own: the same one the
+        # summary aspect and the codegen rules read.
+        has_own_lib = bool(own_lib_sources(info, own.values()))
+        summary_mode = ctx.attr._summaries[BuildSettingInfo].value and analyzer_summaries_supported(sdk_version) and _summaries_ready(ctx, info, has_own_lib)
+        if summary_mode:
             # Only the target's own files are staged: its dependencies come from
             # their summaries, so no closure is read and no closure edit reaches
             # this action. The fix action below keeps the full staging.
@@ -571,6 +603,7 @@ def _dart_analyze_aspect_impl(target, ctx):
             **groups
         ),
         DartFixOutputsInfo(fixes = fixes, manifest = manifest),
+        DartAnalysisModeInfo(summaries = summary_mode),
     ]
 
 dart_analyze = aspect(
