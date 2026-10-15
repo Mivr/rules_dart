@@ -177,11 +177,26 @@ bzl_library(
     srcs = ["utils.bzl"],
     visibility = ["//visibility:public"],
     deps = [
+        ":providers",
         "//dart/private:common",
         "//dart/private:dart_info",
+        "//dart/private:dart_kernel",
         "//dart/private:dart_library",
+        "//dart/private:dart_link_hook",
         "//dart/private:source_set",
     ],
+)
+
+alias(
+    name = "kernel_module",
+    actual = "//dart/private/tools:kernel_module",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "kernel_link",
+    actual = "//dart/private/tools:kernel_link",
+    visibility = ["//visibility:public"],
 )
 
 # The `dart_analysis_config` whose options the `dart_analyze` aspect, `dart_fix`

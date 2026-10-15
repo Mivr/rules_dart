@@ -198,3 +198,19 @@ merged into the analyzed target's provider.""",
         "transitive_resources": "depset[File]: Non-Dart `lib/` files of those packages — where a published ruleset's yaml actually lives.",
     },
 )
+
+DartKernelInfo = provider(
+    doc = """A library's module, and the modules its closure links against.
+
+Read off any `dart_library`, and forwarded by a target that wraps one (see
+`dart_test_package`). A target that does not provide it, or whose closure is not
+modular, makes every executable that depends on it compile whole-program.""",
+    fields = {
+        "kmod": "File or None: this library's module, a directory of one kernel per component of its sources and an `index.json` that lists them. None for a façade with no sources of its own, and when no module is compiled.",
+        "transitive_kmods": "depset[File], postorder: the module directories of this library and every transitive dependency, dependencies first. A module names them as `--input-kmod`, and an executable's link reads their indexes.",
+        "modular": "bool: Whether this closure compiles and links module by module. False when anything in it cannot, and the consumer then compiles whole-program.",
+        "closure_excluded": "depset[File]: the `.vm_excluded.txt` sidecar of this library's module and of every module it links against. A dependent module reads them to exclude the sources that import an excluded file.",
+        "owned": "depset[(str, str)]: a `(label, short_path)` for each source of this library and of every library it depends on. An executable finds a source that two libraries list, see `duplicated_source`.",
+        "edges": "depset[(str, str)]: a `(label, dep_label)` for each `dart_library` this library and every library it depends on names as a dependency. Read with `owned`, to tell a source two libraries list one under the other from two that do not depend on each other.",
+    },
+)

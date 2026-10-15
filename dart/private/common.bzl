@@ -795,13 +795,13 @@ def stable_entry_path(ctx, exec_path):
         exec_path = exec_path[len(prefix):]
     return stable_path(exec_path)
 
-def generate_stable_package_config(packages, all_srcs, roots = {}):
+def generate_stable_package_config(packages, all_srcs, roots = None, scheme = STABLE_SCHEME):
     """Generates a package_config.json whose roots are stable scheme URIs.
 
     `generate_package_config` gives each package an exec-root-relative
     `rootUri`, which `dart compile` turns into an absolute `file:` URI, so every
     compiled output embeds the sandbox it was built in. This variant names each
-    package by its `lib_root` under `STABLE_SCHEME`, which `gen_kernel_args`
+    package by its `lib_root` under `scheme`, which `gen_kernel_args`
     resolves against the exec root and the bin root. A colocated `.pkgsrcs`
     directory's `lib_root` is its own `short_path`, so it resolves the same way.
 
@@ -815,6 +815,7 @@ def generate_stable_package_config(packages, all_srcs, roots = {}):
         roots: Dict of package name to exec-root-relative root for packages
             whose files no `lib/` file reveals (see `executable_inputs`).
             Only the keys are read: a package named here is kept.
+        scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
 
     Returns:
         String content of the package_config.json file.
@@ -827,7 +828,7 @@ def generate_stable_package_config(packages, all_srcs, roots = {}):
         fail(check_err)
 
     index = package_index(packages)
-    used = {name: True for name in roots}
+    used = {name: True for name in (roots or {})}
     for f in all_srcs:
         name = package_for_index(f.short_path, index)
         if name != None:
@@ -843,7 +844,7 @@ def generate_stable_package_config(packages, all_srcs, roots = {}):
         entries.append(
             '    {{"name": "{name}", "rootUri": "{scheme}:///{root}", "packageUri": "lib/"{lv}}}'.format(
                 name = pkg.package_name,
-                scheme = STABLE_SCHEME,
+                scheme = scheme,
                 root = stable_path(pkg.lib_root),
                 lv = lv,
             ),
@@ -852,14 +853,14 @@ def generate_stable_package_config(packages, all_srcs, roots = {}):
         packages = ",\n".join(entries),
     )
 
-def gen_kernel_args(ctx, tools, platform, package_config):
+def gen_kernel_args(ctx, tools, platform, package_config, scheme = STABLE_SCHEME):
     """Starts the argument list of a `gen_kernel` run whose URIs are stable.
 
     The two `--filesystem-root`s are relative to the action's working directory,
     the exec root. The first serves the outputs of the bin root and the second
     source files, so a generated file shadows any stale checked-in copy at the
     same relative path. The caller appends the mode flags, `-o`, and the
-    entrypoint as `STABLE_SCHEME:///<stable_entry_path>`.
+    entrypoint as `<scheme>:///<stable_entry_path>`.
 
     Args:
         ctx: The rule context, for its bin directory.
@@ -867,6 +868,7 @@ def gen_kernel_args(ctx, tools, platform, package_config):
         platform: The platform dill File to compile against: the product one
             for an AOT kernel, the strong one otherwise.
         package_config: The `package_config.json` File, or None.
+        scheme: The multi-root URI scheme (`STABLE_SCHEME` by default).
 
     Returns:
         A `ctx.actions.args()` object beginning with the `gen_kernel` snapshot,
@@ -877,7 +879,7 @@ def gen_kernel_args(ctx, tools, platform, package_config):
     args.add("--platform", platform)
     if package_config != None:
         args.add("--packages", package_config)
-    args.add("--filesystem-scheme", STABLE_SCHEME)
+    args.add("--filesystem-scheme", scheme)
     args.add("--filesystem-root", ctx.bin_dir.path)
     args.add("--filesystem-root", ".")
     return args

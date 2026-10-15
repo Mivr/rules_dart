@@ -7,18 +7,25 @@ function of plain values, so each is tested here by calling it. The actions that
 use them are exercised by the rules' own test targets.
 """
 
-load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
-load("//dart/private:common.bzl", "stable_path")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
+load("//dart:providers.bzl", "DartKernelInfo")
 load(
-    "//dart/private:dart_kernel.bzl",
+    "//dart:utils.bzl",
+    "STABLE_SCHEME",
     "duplicated_source",
     "entry_source_uri",
+    "entry_sources",
     "first_per_package",
+    "generate_stable_package_config",
+    "kernel_module_action",
     "kernel_package_config",
     "kernel_packages_consistent",
     "library_source_uri",
     "modular_kernel_eligible",
     "multi_root_uri",
+    "no_kernel_module",
+    "stable_entry_path",
+    "stable_path",
 )
 load(":small_suite.bzl", "small_unittest_suite")
 
@@ -66,6 +73,29 @@ def _multi_root_uri_test_impl(ctx):
     )
     return unittest.end(env)
 
+def _multi_root_uri_custom_scheme_test_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(env, "org-dartlang-bazel", STABLE_SCHEME)
+    asserts.equals(
+        env,
+        "org-dartlang-app:///pkg/a",
+        multi_root_uri("pkg/a", scheme = "org-dartlang-app"),
+        "a main-repo package root under a custom scheme",
+    )
+    asserts.equals(
+        env,
+        "org-dartlang-app:///",
+        multi_root_uri("", scheme = "org-dartlang-app"),
+        "the root package under a custom scheme",
+    )
+    asserts.equals(
+        env,
+        "org-dartlang-app:///external/repo/sub",
+        multi_root_uri("../repo/sub", scheme = "org-dartlang-app"),
+        "an external sub-package root under a custom scheme",
+    )
+    return unittest.end(env)
+
 def _entry_source_uri_test_impl(ctx):
     env = unittest.begin(ctx)
     asserts.equals(
@@ -86,6 +116,34 @@ def _entry_source_uri_test_impl(ctx):
         entry_source_uri("../repo/test/x_test.dart"),
         "a test from an external repo",
     )
+    return unittest.end(env)
+
+def _entry_source_uri_custom_scheme_test_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "org-dartlang-app:///pkg/test/x_test.dart",
+        entry_source_uri("pkg/test/x_test.dart", scheme = "org-dartlang-app"),
+        "a test in the main repo under a custom scheme",
+    )
+    asserts.equals(
+        env,
+        "org-dartlang-app:///external/repo/test/x_test.dart",
+        entry_source_uri("../repo/test/x_test.dart", scheme = "org-dartlang-app"),
+        "an external test under a custom scheme",
+    )
+    fake_file = struct(short_path = "../repo/test/x_test.dart", path = "external/repo/test/x_test.dart")
+    fake_ctx = struct(bin_dir = struct(path = "bazel-out/k8-fastbuild/bin"))
+    asserts.equals(
+        env,
+        "pkg/x.vm_test.dart",
+        stable_entry_path(fake_ctx, "bazel-out/k8-fastbuild/bin/pkg/x.vm_test.dart"),
+        "stable_entry_path strips bin_dir prefix",
+    )
+    entries = entry_sources([fake_file], scheme = "org-dartlang-app")
+    asserts.equals(env, 1, len(entries))
+    asserts.equals(env, "org-dartlang-app:///external/repo/test/x_test.dart", entries[0].uri)
+    asserts.equals(env, fake_file, entries[0].file)
     return unittest.end(env)
 
 def _library_source_uri_test_impl(ctx):
@@ -128,6 +186,35 @@ def _package_config_test_impl(ctx):
         "}\n"
     )
     asserts.equals(env, expected, config, "one entry per package, with its multi-root rootUri")
+    return unittest.end(env)
+
+def _package_config_custom_scheme_test_impl(ctx):
+    env = unittest.begin(ctx)
+    pkgs = [
+        _pkg("a", "pkg/a", "3.9"),
+        _pkg("root", ""),
+        _pkg("ext", "../repo/sub"),
+    ]
+    config = kernel_package_config(pkgs, scheme = "org-dartlang-app")
+    expected = (
+        "{\n" +
+        '  "configVersion": 2,\n' +
+        '  "packages": [\n' +
+        '    {"name": "a", "rootUri": "org-dartlang-app:///pkg/a", "packageUri": "lib/", "languageVersion": "3.9"},\n' +
+        '    {"name": "root", "rootUri": "org-dartlang-app:///", "packageUri": "lib/"},\n' +
+        '    {"name": "ext", "rootUri": "org-dartlang-app:///external/repo/sub", "packageUri": "lib/"}\n' +
+        "  ]\n" +
+        "}\n"
+    )
+    asserts.equals(env, expected, config, "kernel_package_config uses the custom scheme")
+
+    stable_cfg = generate_stable_package_config(
+        pkgs,
+        [],
+        roots = {"a": "pkg/a", "ext": "external/repo/sub"},
+        scheme = "org-dartlang-app",
+    )
+    asserts.equals(env, expected, stable_cfg, "generate_stable_package_config uses the custom scheme")
     return unittest.end(env)
 
 def _packages_consistent_test_impl(ctx):
@@ -273,11 +360,156 @@ def _eligible_test_impl(ctx):
         asserts.false(env, modular_kernel_eligible(**kwargs), reason)
     return unittest.end(env)
 
+def _custom_kernel_module_fixture_impl(ctx):
+    dartaotruntime = ctx.actions.declare_file(ctx.label.name + "_dartaotruntime")
+    kernel_worker = ctx.actions.declare_file(ctx.label.name + "_kernel_worker.snapshot")
+    default_platform_dill = ctx.actions.declare_file(ctx.label.name + "_vm_platform_strong.dill")
+    default_libraries_json = ctx.actions.declare_file(ctx.label.name + "_default_libraries.json")
+    custom_platform_dill = ctx.actions.declare_file(ctx.label.name + "_flutter_platform_strong.dill")
+    custom_libraries_json = ctx.actions.declare_file(ctx.label.name + "_flutter_libraries.json")
+    src_file = ctx.actions.declare_file(ctx.label.name + "_widget.dart")
+    for f in [
+        dartaotruntime,
+        kernel_worker,
+        default_platform_dill,
+        default_libraries_json,
+        custom_platform_dill,
+        custom_libraries_json,
+        src_file,
+    ]:
+        ctx.actions.write(output = f, content = "")
+
+    tools = struct(
+        dartaotruntime = dartaotruntime,
+        kernel_worker = kernel_worker,
+        platform_dill = default_platform_dill,
+        libraries_json = default_libraries_json,
+        version = "3.11.0",
+    )
+    kmod = ctx.actions.declare_directory(ctx.label.name + ".kmod")
+    excluded = kernel_module_action(
+        ctx = ctx,
+        tools = tools,
+        sources = [struct(uri = "package:a/widget.dart", file = src_file)],
+        packages = [_pkg("a", "pkg/a", "3.9")],
+        dep_kmods = depset(order = "postorder"),
+        output = kmod,
+        defines = ["FLUTTER_WEB=false"],
+        exclude_non_sources = True,
+        droppable = True,
+        target = "flutter",
+        platform_dill = custom_platform_dill,
+        libraries_json = custom_libraries_json,
+        libraries_platform = "flutter",
+        extra_libraries = ["ui", "nativewrappers"],
+        scheme = "org-dartlang-app",
+        extra_frontend_flags = ["--track-widget-creation"],
+    )
+    info = no_kernel_module()
+    return [
+        DefaultInfo(files = depset([kmod, excluded])),
+        DartKernelInfo(
+            kmod = kmod,
+            transitive_kmods = info.transitive_kmods,
+            modular = True,
+            closure_excluded = depset([excluded]),
+            owned = info.owned,
+            edges = info.edges,
+        ),
+    ]
+
+_custom_kernel_module_fixture = rule(
+    implementation = _custom_kernel_module_fixture_impl,
+    attrs = {
+        "_kernel_module": attr.label(
+            default = Label("//dart:kernel_module"),
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+
+def _kernel_module_action_custom_params_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.true(env, DartKernelInfo in target, "fixture provides Public DartKernelInfo")
+    asserts.true(env, target[DartKernelInfo].modular)
+
+    actions = analysistest.target_actions(env)
+    pkg_cfg_writes = [
+        a
+        for a in actions
+        if a.mnemonic == "FileWrite" and a.outputs.to_list()[0].basename.endswith(".package_config.json")
+    ]
+    asserts.equals(env, 1, len(pkg_cfg_writes), "writes one package_config.json")
+    asserts.true(
+        env,
+        "org-dartlang-app:///pkg/a" in pkg_cfg_writes[0].content,
+        "package_config.json uses the custom scheme",
+    )
+
+    kernel_actions = [a for a in actions if a.mnemonic == "DartKernel"]
+    asserts.equals(env, 1, len(kernel_actions), "registers one DartKernel action")
+    kernel_action = kernel_actions[0]
+    argv = kernel_action.argv
+
+    asserts.true(env, "--target" in argv and "flutter" in argv, "--target flutter passed")
+    asserts.true(
+        env,
+        "--libraries-platform" in argv and "flutter" in argv,
+        "--libraries-platform flutter passed",
+    )
+    asserts.true(
+        env,
+        "--extra-library" in argv and "ui" in argv and "nativewrappers" in argv,
+        "--extra-library flags passed",
+    )
+    asserts.true(
+        env,
+        "--multi-root-scheme" in argv and "org-dartlang-app" in argv,
+        "--multi-root-scheme org-dartlang-app passed",
+    )
+    asserts.true(
+        env,
+        "--track-widget-creation" in argv,
+        "extra_frontend_flags forwarded",
+    )
+
+    input_basenames = [f.basename for f in kernel_action.inputs.to_list()]
+    asserts.true(
+        env,
+        any([b.endswith("_flutter_platform_strong.dill") for b in input_basenames]),
+        "custom platform_dill is in action inputs",
+    )
+    asserts.false(
+        env,
+        any([b.endswith("_vm_platform_strong.dill") for b in input_basenames]),
+        "default platform_dill is replaced when custom platform_dill is given",
+    )
+    asserts.true(
+        env,
+        any([b.endswith("_flutter_libraries.json") for b in input_basenames]),
+        "custom libraries_json is in action inputs",
+    )
+    asserts.false(
+        env,
+        any([b.endswith("_default_libraries.json") for b in input_basenames]),
+        "default libraries_json is replaced when custom libraries_json is given",
+    )
+    return analysistest.end(env)
+
+_kernel_module_action_custom_params_test = analysistest.make(
+    _kernel_module_action_custom_params_test_impl,
+)
+
 _root_path_test = unittest.make(_root_path_test_impl)
 _multi_root_uri_test = unittest.make(_multi_root_uri_test_impl)
+_multi_root_uri_custom_scheme_test = unittest.make(_multi_root_uri_custom_scheme_test_impl)
 _entry_source_uri_test = unittest.make(_entry_source_uri_test_impl)
+_entry_source_uri_custom_scheme_test = unittest.make(_entry_source_uri_custom_scheme_test_impl)
 _library_source_uri_test = unittest.make(_library_source_uri_test_impl)
 _package_config_test = unittest.make(_package_config_test_impl)
+_package_config_custom_scheme_test = unittest.make(_package_config_custom_scheme_test_impl)
 _packages_consistent_test = unittest.make(_packages_consistent_test_impl)
 _first_per_package_test = unittest.make(_first_per_package_test_impl)
 _duplicated_source_test = unittest.make(_duplicated_source_test_impl)
@@ -289,15 +521,34 @@ def kernel_test_suite(name):
     Args:
       name: Name of the generated `test_suite`.
     """
+    _custom_kernel_module_fixture(
+        name = name + "_custom_module_fixture",
+        tags = ["manual"],
+    )
+    _kernel_module_action_custom_params_test(
+        name = name + "_custom_module_action_test",
+        target_under_test = ":" + name + "_custom_module_fixture",
+        size = "small",
+    )
     small_unittest_suite(
-        name,
+        name + "_unit",
         _root_path_test,
         _multi_root_uri_test,
+        _multi_root_uri_custom_scheme_test,
         _entry_source_uri_test,
+        _entry_source_uri_custom_scheme_test,
         _library_source_uri_test,
         _package_config_test,
+        _package_config_custom_scheme_test,
         _packages_consistent_test,
         _first_per_package_test,
         _duplicated_source_test,
         _eligible_test,
+    )
+    native.test_suite(
+        name = name,
+        tests = [
+            ":" + name + "_unit",
+            ":" + name + "_custom_module_action_test",
+        ],
     )
