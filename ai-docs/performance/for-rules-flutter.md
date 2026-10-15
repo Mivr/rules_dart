@@ -174,16 +174,19 @@ What it will look like:
   the helper will take the list of extra available `dart:` libraries (or
   Flutter's own `libraries.json`) as a parameter.
 
-### B. Analyzer summaries and `dart:ui`: accepted (plan #17)
+### B. Analyzer summaries and `dart:ui`: done (plan #17b)
 
-`package:analyzer` 13.3.0's `buildSdkSummary` takes `embedderYamlPath`, which
-appends the embedder's libraries (sky_engine's `lib/_embedder.yaml` gives
-`dart:ui`) to the SDK summary. Plan: the SDK-summary target takes an optional
-embedder (`_embedder.yaml` plus the package's files), selectable by a label
-flag so a Flutter workspace sets it once. Until it lands, do not turn on
-`//dart:analyzer_summaries` in a Flutter workspace: a Flutter library analyzed
-in summary mode cannot resolve `dart:ui`. The flag is off by default, so
-nothing changes unless it is set.
+`dart_analyzer_summary` now propagates along `deps`, `library`, and
+`_sky_engine`. When it visits Flutter's `sky_engine` package (with
+`lib/_embedder.yaml`), it builds an embedder SDK summary (`analyzer_summary sdk
+--embedder-yaml`) that appends `dart:ui` and the rest of the embedder's `dart:`
+libraries to the SDK summary, marks `sky_engine` covered, and propagates the
+embedder SDK summary in `DartAnalyzerSummaryInfo.embedder_sdk_summaries`.
+`summarize` and `analyze` pass `--sdk-summary` (`sdkSummaryPath` on
+`AnalysisContextCollectionImpl`) so `SummaryBasedDartSdk` resolves `dart:ui`
+directly from the embedder SDK summary without staging `sky_engine`. Flutter
+targets work automatically with `//dart:analyzer_summaries` (on by default); no
+flag or rule change is needed in `rules_flutter`.
 
 ### C. One stable URI scheme: proposal
 
@@ -311,9 +314,10 @@ module (`e2e/codegen` `//source_set_pkg:colocated_test`) and against
 
 ### `//dart:analyzer_summaries` is on by default (`17fab99`)
 
-- A Flutter target (a `sky_engine` package or any `lib/_embedder.yaml` in its
-  closure) is analyzed from source automatically; nothing to set. Plan #17b
-  would let it use summaries.
+- Flutter targets (`sky_engine` with `lib/_embedder.yaml`, via `deps` or
+  `_sky_engine`) build and use an embedder SDK summary automatically so
+  `dart:ui` resolves in summary mode; a non-`sky_engine` `lib/_embedder.yaml`
+  falls back to source analysis.
 - Summary mode is off on a Dart SDK newer than `ANALYZER_MAX_LANGUAGE_VERSION`
   (`3.13`, in `dart_analyzer_summary.bzl`), so a newer Flutter-bundled Dart
   analyzes from source until the pinned analyzer is bumped.

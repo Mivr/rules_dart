@@ -6,9 +6,11 @@ when a summary covers it. An opaque `srcs_dir` library has no summary, so its
 package must be left uncovered; otherwise a dependent would be analyzed against
 a summary that does not exist.
 
-A closure holding a Flutter embedder (`sky_engine`, or a `lib/_embedder.yaml`)
-is never analyzed from summaries, since the SDK summary has no `dart:ui`. Its
-package is uncovered, so the same holds for every target above it.
+Flutter's `sky_engine` (`lib/_embedder.yaml`) builds an embedder SDK summary
+that adds `dart:ui` to the SDK summary, so `sky_engine` and the targets above it
+are covered and analyzed from summaries. A non-`sky_engine` package with a
+`lib/_embedder.yaml` has no embedder SDK summary, so its closure is analyzed
+from source.
 
 The summary and mode tests set `//dart:analyzer_summaries` explicitly where
 they need it, and `default_mode_test` leaves it at its default, so the default
@@ -62,8 +64,7 @@ def _summary_file_test_impl(ctx):
     )
     return analysistest.end(env)
 
-# Whether a target builds a summary of its own. A closure with a Flutter embedder
-# builds none, since the summary would leave `dart:ui` unresolved.
+# Whether a target builds a summary of its own.
 summary_file_test = analysistest.make(
     _summary_file_test_impl,
     attrs = {"expect_summary": attr.bool(mandatory = True)},

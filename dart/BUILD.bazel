@@ -33,10 +33,10 @@ bool_flag(
 # `.bazelrc` to analyze from source, as `dart analyze` runs:
 #   common --@rules_dart//dart:analyzer_summaries=false
 #
-# A target is analyzed from source anyway when its closure holds a Flutter
-# embedder (`sky_engine`, or a `lib/_embedder.yaml`), since a summary cannot
-# resolve `dart:ui`; when the analyzing SDK is newer than the pinned analyzer
-# supports (`ANALYZER_MAX_LANGUAGE_VERSION` in dart/private/dart_analyzer_summary.bzl);
+# A target is analyzed from source anyway when its closure holds an unbacked
+# embedder (a `lib/_embedder.yaml` outside Flutter's `sky_engine`), when the
+# analyzing SDK is newer than the pinned analyzer supports
+# (`ANALYZER_MAX_LANGUAGE_VERSION` in dart/private/dart_analyzer_summary.bzl),
 # and when a dependency has no summary, such as an opaque `srcs_dir` library.
 # `dart_codegen` passes summaries only to generators built on the builder shim.
 #

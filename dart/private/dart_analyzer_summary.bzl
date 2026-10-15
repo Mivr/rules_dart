@@ -2,9 +2,9 @@
 
 Under `//dart:analyzer_summaries`, the `dart_analyze` aspect checks a target's
 own files against the summaries of its dependencies, rather than against their
-source. This aspect makes those summaries. It propagates along `deps` and
-`library`, and `dart_analyze` requires it, so every dependency of an analyzed
-target carries one.
+source. This aspect makes those summaries. It propagates along `deps`,
+`library`, and `_sky_engine`, and `dart_analyze` requires it, so every
+dependency of an analyzed target carries one.
 
 A summary is the declarations of a package's libraries, and what constants they
 need. It holds no function bodies, so a body edit leaves a package's summary
@@ -14,14 +14,17 @@ unchanged and its dependents are not checked again. It is built by the
 
 A summary refers to the SDK's libraries, which no package's summary holds, so
 every summary-mode action also reads the SDK's own summary, one per SDK,
-`analyzer_sdk_summary`.
+`analyzer_sdk_summary`. When a closure carries Flutter's `sky_engine` and its
+`lib/_embedder.yaml`, the aspect builds an embedder SDK summary (`--embedder-yaml`)
+that adds `dart:ui` and the embedder's other `dart:` libraries to the SDK
+summary, marks `sky_engine` covered, and propagates that embedder SDK summary to
+dependents in `embedder_sdk_summaries`.
 
 With the flag off the aspect declares no actions and provides empty values, so
 a build without the flag is as it was. The same holds where summary mode is
 unsafe: a toolchain SDK newer than the pinned analyzer supports
-(`analyzer_summaries_supported`), and a closure with a Flutter embedder
-(`embedder_in_closure`). A closure with an embedder gets no summary of its own,
-and its package is not covered, so no dependent is analyzed against it.
+(`analyzer_summaries_supported`), and a closure with an unbacked embedder
+(`unbacked_embedder_in_closure`).
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
@@ -83,9 +86,10 @@ def analyzer_summaries_supported(sdk_version):
 CONFLICT_PREFIX = "conflict:"
 
 # A Flutter embedder. `dart:ui` is not in the Dart SDK: the analyzer finds it
-# through the `lib/_embedder.yaml` of a package, Flutter's `sky_engine`. The SDK
-# summary is built from the Dart SDK alone, so a closure holding either one
-# cannot be analyzed from summaries.
+# through the `lib/_embedder.yaml` of Flutter's `sky_engine`, which
+# `dart_analyzer_summary` turns into an embedder SDK summary. Pre-compiled
+# codegen shims cannot take an embedder SDK summary, so `dart_codegen` still
+# checks `embedder_in_closure`.
 _EMBEDDER_PACKAGE = "sky_engine"
 _EMBEDDER_FILE = "_embedder.yaml"
 
@@ -108,12 +112,65 @@ def embedder_in_closure(info):
             return True
     return False
 
+def _own_embedder_yaml(info, files):
+    """Returns the `lib/_embedder.yaml` file of `info`'s own `sky_engine` package, or None.
+
+    Args:
+      info: The target's `DartInfo`.
+      files: Candidate `File`s, typically the target's `DefaultInfo` files.
+
+    Returns:
+      The `_embedder.yaml` `File` when `info` is `sky_engine` and carries one, or None.
+    """
+    if info.package_name != _EMBEDDER_PACKAGE:
+        return None
+    expected = ((info.lib_root + "/lib/") if info.lib_root else "lib/") + _EMBEDDER_FILE
+    for f in files + info.transitive_resources.to_list():
+        if f.short_path == expected:
+            return f
+    return None
+
+def unbacked_embedder_in_closure(info, embedder_sdk_summary):
+    """Returns whether `info`'s closure holds a Flutter embedder not backed by `embedder_sdk_summary`.
+
+    A `sky_engine` package with `lib/_embedder.yaml` builds an embedder SDK
+    summary (`embedder_sdk_summary`) that adds `dart:ui` and the rest of the
+    embedder's `dart:` libraries to the SDK summary. When that summary is
+    present, `sky_engine` and its `lib/_embedder.yaml` are backed; any other
+    `lib/_embedder.yaml` (or `sky_engine` without an embedder SDK summary) is
+    not.
+
+    Args:
+      info: The target's `DartInfo`.
+      embedder_sdk_summary: The single embedder SDK summary `File` from the
+        closure's `DartAnalyzerSummaryInfo.embedder_sdk_summaries`, or None.
+
+    Returns:
+      True when the closure has an embedder that `embedder_sdk_summary` does not
+      cover.
+    """
+    if not embedder_in_closure(info):
+        return False
+    if embedder_sdk_summary == None:
+        return True
+    sky_embedders = {
+        ((pkg.lib_root + "/lib/") if pkg.lib_root else "lib/") + _EMBEDDER_FILE: True
+        for pkg in info.transitive_packages.to_list()
+        if pkg.package_name == _EMBEDDER_PACKAGE
+    }
+    for f in info.transitive_resources.to_list():
+        path = f.short_path
+        if (path == "lib/" + _EMBEDDER_FILE or path.endswith("/lib/" + _EMBEDDER_FILE)) and path not in sky_embedders:
+            return True
+    return False
+
 DartAnalyzerSummaryInfo = provider(
     doc = "A target's analyzer summaries, for `dart_analyze` in analyzer-summary mode.",
     fields = {
         "summary": "File or None: the summary of this target's own libraries. None when it has none, or the flag is off.",
         "transitive_summaries": "depset[File]: the summaries of this target and of every target it depends on.",
         "packaged_summaries": "depset[(str, File)]: the same summaries as `transitive_summaries`, each paired with the name of the package it summarizes. A consumer drops the pairs of its own package, which it reads from source.",
+        "embedder_sdk_summaries": "depset[File]: embedder SDK summaries built from `sky_engine`'s `lib/_embedder.yaml` in this target's closure. When a single one is present, `summarize` and `analyze` read it instead of the plain SDK summary so `dart:ui` resolves.",
         "packages": "depset[str]: the keys (see `package_key`) of this target's own package and of every package its dependencies carry. A package in a closure that is missing here has no summary, so its dependents are analyzed from source.",
         "own_files": "depset[str]: `package_key` and `|` and the `short_path` of each of this target's own `lib/` sources, and of those of every target it depends on. Says which libraries the summaries define, so a target sharing its package with a dependency can tell whether it adds to that package.",
     },
@@ -178,9 +235,9 @@ once per SDK; `dart/private/BUILD.bazel` declares the instance the aspects use.
 )
 
 def closure_attrs(ctx):
-    """Returns the targets a rule's closure is built from: its `deps`, and its `library`.
+    """Returns the targets a rule's closure is built from: `deps`, `library`, and `_sky_engine`.
 
-    The aspect propagates along the same two attributes, so every target here
+    The aspect propagates along the same three attributes, so every target here
     carries the provider, unless it is not a Dart target at all.
 
     Args:
@@ -193,6 +250,9 @@ def closure_attrs(ctx):
     library = getattr(ctx.rule.attr, "library", None)
     if library != None:
         targets.append(library)
+    sky_engine = getattr(ctx.rule.attr, "_sky_engine", None)
+    if sky_engine != None:
+        targets.append(sky_engine)
     return targets
 
 def _own_sources(info, files):
@@ -254,19 +314,72 @@ def _dart_analyzer_summary_impl(target, ctx):
     ])
     info = target[DartInfo]
     if not ctx.attr._enabled[BuildSettingInfo].value or not analyzer_summaries_supported(ctx.toolchains[_TOOLCHAIN].dart_sdk_info.version):
-        return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = depset(), packaged_summaries = depset(), packages = depset(), own_files = depset())]
+        return [DartAnalyzerSummaryInfo(
+            summary = None,
+            transitive_summaries = depset(),
+            packaged_summaries = depset(),
+            embedder_sdk_summaries = depset(),
+            packages = depset(),
+            own_files = depset(),
+        )]
 
     # A target's own package is covered only by a summary that covers it. A
     # target with sources of its own gets one below, or, for an opaque `srcs_dir`
     # directory, gets none, so its package stays uncovered and a dependent is
     # analyzed from source. A target with no sources of its own (a façade of
-    # `deps`) has nothing to cover, so its package is covered. A closure with a
-    # Flutter embedder gets none either: its summary would leave `dart:ui`
-    # unresolved. Its dependencies' summaries still pass through, since they hold
-    # no embedder.
+    # `deps`) has nothing to cover, so its package is covered. `sky_engine` with
+    # `lib/_embedder.yaml` builds an embedder SDK summary that covers `sky_engine`
+    # and gives its dependents `dart:ui`; a closure with an unbacked embedder gets
+    # no summary of its own, and its package stays uncovered.
     files = target[DefaultInfo].files.to_list()
     srcs = _own_sources(info, files)
-    embedder = embedder_in_closure(info)
+    inherited_embedder_sdks = depset(transitive = [
+        d[DartAnalyzerSummaryInfo].embedder_sdk_summaries
+        for d in deps
+        if DartAnalyzerSummaryInfo in d
+    ])
+    key = package_key(info)
+    lib_keys = [key + "|" + f.short_path for f in srcs]
+    own_files = depset(
+        lib_keys,
+        transitive = [d[DartAnalyzerSummaryInfo].own_files for d in deps if DartAnalyzerSummaryInfo in d],
+    )
+    packaged = depset(
+        transitive = [d[DartAnalyzerSummaryInfo].packaged_summaries for d in deps if DartAnalyzerSummaryInfo in d],
+    )
+
+    embedder_yaml = _own_embedder_yaml(info, files)
+    if embedder_yaml != None:
+        dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
+        embedder_sdk = ctx.actions.declare_file(ctx.label.name + ".embedder_sdk.sum")
+        args = ctx.actions.args()
+        args.add("sdk")
+        args.add("--sdk", sdk_root_path(dart_sdk_info))
+        args.add("--embedder-yaml", embedder_yaml)
+        args.add("--out", embedder_sdk)
+        ctx.actions.run(
+            executable = ctx.executable._tool,
+            arguments = [args],
+            inputs = depset(
+                direct = files,
+                transitive = [dart_sdk_info.analyze_files, info.transitive_srcs, info.transitive_resources],
+            ),
+            outputs = [embedder_sdk],
+            mnemonic = "DartAnalyzerSdkSummary",
+            progress_message = "Summarizing Dart embedder SDK %{label}",
+        )
+        return [DartAnalyzerSummaryInfo(
+            summary = None,
+            transitive_summaries = dependencies,
+            packaged_summaries = packaged,
+            embedder_sdk_summaries = depset([embedder_sdk], transitive = [inherited_embedder_sdks]),
+            packages = depset([key], transitive = [d[DartAnalyzerSummaryInfo].packages for d in deps if DartAnalyzerSummaryInfo in d]),
+            own_files = own_files,
+        )]
+
+    embedder_sdk_list = inherited_embedder_sdks.to_list()
+    embedder_sdk_summary = embedder_sdk_list[0] if len(embedder_sdk_list) == 1 else None
+    embedder = unbacked_embedder_in_closure(info, embedder_sdk_summary)
 
     # A package split across targets: a dependency covers this target's own
     # package too, as `split` does through its wrapper, or a `dart_library` lists
@@ -275,14 +388,12 @@ def _dart_analyzer_summary_impl(target, ctx):
     # each other. This target builds no summary, and its package is marked as
     # conflicting, which every dependent reads as uncovered. Its dependents are
     # then analyzed from source, as they were before the flag existed.
-    key = package_key(info)
     inherited = {
         k: True
         for d in deps
         if DartAnalyzerSummaryInfo in d
         for k in d[DartAnalyzerSummaryInfo].packages.to_list()
     }
-    lib_keys = [key + "|" + f.short_path for f in srcs]
     split = False
     redundant = False
     if srcs and key in inherited:
@@ -298,10 +409,6 @@ def _dart_analyzer_summary_impl(target, ctx):
         }
         split = any([k not in defined for k in lib_keys])
         redundant = not split
-    own_files = depset(
-        lib_keys,
-        transitive = [d[DartAnalyzerSummaryInfo].own_files for d in deps if DartAnalyzerSummaryInfo in d],
-    )
     own = [key] if (not embedder and not split and not redundant and (srcs or not _has_own_sources(files))) else []
     if split:
         own = [CONFLICT_PREFIX + key]
@@ -309,11 +416,15 @@ def _dart_analyzer_summary_impl(target, ctx):
         own,
         transitive = [d[DartAnalyzerSummaryInfo].packages for d in deps if DartAnalyzerSummaryInfo in d],
     )
-    packaged = depset(
-        transitive = [d[DartAnalyzerSummaryInfo].packaged_summaries for d in deps if DartAnalyzerSummaryInfo in d],
-    )
     if not srcs or embedder or split or redundant:
-        return [DartAnalyzerSummaryInfo(summary = None, transitive_summaries = dependencies, packaged_summaries = packaged, packages = packages, own_files = own_files)]
+        return [DartAnalyzerSummaryInfo(
+            summary = None,
+            transitive_summaries = dependencies,
+            packaged_summaries = packaged,
+            embedder_sdk_summaries = inherited_embedder_sdks,
+            packages = packages,
+            own_files = own_files,
+        )]
 
     name = ctx.label.name + ".dart_analyzer_summary"
     summary = ctx.actions.declare_file(name + ".sum")
@@ -348,12 +459,13 @@ def _dart_analyzer_summary_impl(target, ctx):
     )
 
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
+    sdk_summary = embedder_sdk_summary or ctx.file._sdk_summary
     args = ctx.actions.args()
     args.add("summarize")
     args.add("--sdk", sdk_root_path(dart_sdk_info))
     args.add("--packages", config)
     args.add("--out", summary)
-    args.add("--summary", ctx.file._sdk_summary)
+    args.add("--sdk-summary", sdk_summary)
     for f, link in zip(srcs, staged):
         args.add("--source", link)
         args.add("--uri", _package_uri(info, f))
@@ -361,7 +473,7 @@ def _dart_analyzer_summary_impl(target, ctx):
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = depset(direct = srcs + staged + [config, ctx.file._sdk_summary], transitive = [dart_sdk_info.analyze_files, dependencies]),
+        inputs = depset(direct = srcs + staged + [config, sdk_summary], transitive = [dart_sdk_info.analyze_files, dependencies]),
         outputs = [summary],
         mnemonic = "DartAnalyzerSummary",
         progress_message = "Summarizing Dart library %{label}",
@@ -370,16 +482,18 @@ def _dart_analyzer_summary_impl(target, ctx):
         summary = summary,
         transitive_summaries = depset([summary], transitive = [dependencies]),
         packaged_summaries = depset([(info.package_name, summary)], transitive = [packaged]),
+        embedder_sdk_summaries = inherited_embedder_sdks,
         packages = packages,
         own_files = own_files,
     )]
 
 dart_analyzer_summary = aspect(
     implementation = _dart_analyzer_summary_impl,
-    # `deps` is what rules_dart builds a closure from. `library` is the one
-    # other attribute that carries one: `dart_test_package` names its library
-    # there, so without it a test's package closure would stop at the runner.
-    attr_aspects = ["deps", "library"],
+    # `deps` is what rules_dart builds a closure from. `library` is where
+    # `dart_test_package` names its library, and `_sky_engine` is where
+    # rules_flutter's library, plugin, test, and web rules attach Flutter's
+    # `sky_engine` embedder package.
+    attr_aspects = ["deps", "library", "_sky_engine"],
     attrs = {
         "_enabled": attr.label(
             default = "//dart:analyzer_summaries",
