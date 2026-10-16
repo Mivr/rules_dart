@@ -217,5 +217,7 @@ modular, makes every executable that depends on it compile whole-program.""",
         "edges": "depset[(str, str)]: a `(label, dep_label)` for each `dart_library` this library and every library it depends on names as a dependency. Read with `owned`, to tell a source two libraries list one under the other from two that do not depend on each other.",
         "base_dill": "File or None: optional pre-linked shared base `.dill` (e.g. for `package:test` or `package:flutter_test`) carried by this closure.",
         "base_keys": "File or None: the `.keys` manifest listing the `<kmod>:<dill>` SCCs already present in `base_dill`.",
+        "base_kmods": "depset[File]: `.kmod` directories fully seeded into `base_dill`.",
+        "unseeded_base_kmods": "depset[File]: `.kmod` directories in `base_dill`'s closure that were not seeded (e.g. CLI-only test deps), prunable unless also in user deps.",
     },
 )

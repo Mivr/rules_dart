@@ -114,10 +114,16 @@ dart_test(
 
 dart_binary(
     name = "format_runner",
+    code_assets_from_deps = False,
     compile_mode = "kernel",
     main = "format_runner.dart",
     modular_kernel = False,
     visibility = ["//dart:__subpackages__"],
+    deps = [
+        "@ext_pub_deps//:dart_style",
+        "@ext_pub_deps//:package_config",
+        "@ext_pub_deps//:pub_semver",
+    ],
 )
 
 dart_binary(

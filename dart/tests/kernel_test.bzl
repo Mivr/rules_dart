@@ -430,6 +430,10 @@ def _custom_kernel_module_fixture_impl(ctx):
             cross_pkg_srcs = info.cross_pkg_srcs,
             owned = info.owned,
             edges = info.edges,
+            base_dill = info.base_dill,
+            base_keys = info.base_keys,
+            base_kmods = info.base_kmods,
+            unseeded_base_kmods = info.unseeded_base_kmods,
         ),
     ]
 

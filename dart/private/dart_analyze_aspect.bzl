@@ -447,6 +447,8 @@ def _format(ctx, name, staged, sdk_inputs, own_paths, language_version):
     )
     stamp = ctx.actions.declare_file(name + ".formatted")
     args = ctx.actions.args()
+    args.use_param_file("@%s", use_always = True)
+    args.set_param_file_format("multiline")
     args.add("--dart", dart_sdk_info.dart)
     args.add("--project", staged.proj_path)
     args.add("--manifest", manifest)
@@ -462,7 +464,10 @@ def _format(ctx, name, staged, sdk_inputs, own_paths, language_version):
         outputs = [stamp],
         mnemonic = "DartFormat",
         progress_message = "Checking Dart formatting of %{label}",
-        env = writable_home_env(dart_sdk_info.dart, stamp),
+        execution_requirements = {
+            "supports-workers": "1",
+            "requires-worker-protocol": "proto",
+        },
     )
     return stamp
 
@@ -522,8 +527,14 @@ def _dart_analyze_aspect_impl(target, ctx):
     sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.analyze_files, dart_sdk_info.runtime_files])
 
     # The formatter reads no more of the SDK than the compiler does, so it takes
-    # the compile subset (which also covers `dartvm` for `format_runner.dill`).
-    format_sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.compile_files, dart_sdk_info.runtime_files])
+    # the compile subset when falling back to the SDK's `dart format` CLI. When
+    # the embedded `package:dart_style` supports `sdk_version`, `format_runner`
+    # formats in-process and needs only `runtime_files` to run `format_runner.dill`.
+    format_sdk_inputs = (
+        depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.runtime_files])
+        if analyzer_summaries_supported(sdk_version)
+        else depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.compile_files, dart_sdk_info.runtime_files])
+    )
 
     tags = getattr(ctx.rule.attr, "tags", [])
     groups = {}

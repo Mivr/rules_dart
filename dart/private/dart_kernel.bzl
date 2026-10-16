@@ -460,6 +460,8 @@ def no_kernel_module():
         edges = depset(),
         base_dill = None,
         base_keys = None,
+        base_kmods = depset(),
+        unseeded_base_kmods = depset(),
     )
 
 def kernel_module_action(
@@ -723,6 +725,10 @@ def kernel_link_action(
         outputs = outputs,
         mnemonic = "DartKernelLink",
         progress_message = "Linking Dart kernel %s" % ctx.label,
+        execution_requirements = {
+            "supports-workers": "1",
+            "requires-worker-protocol": "proto",
+        },
     )
 
 def entry_sources(files, scheme = STABLE_SCHEME):
@@ -885,6 +891,8 @@ def modular_executable_kernel(
     )
     base_dill = None
     base_keys = None
+    base_kmods = depset()
+    unseeded_base_kmods = depset()
     if use_base_dill:
         for k in dep_kernels:
             kd = getattr(k, "base_dill", None)
@@ -892,9 +900,56 @@ def modular_executable_kernel(
             if kd != None and kk != None:
                 base_dill = kd
                 base_keys = kk
+                base_kmods = getattr(k, "base_kmods", depset())
+                unseeded_base_kmods = getattr(k, "unseeded_base_kmods", depset())
                 break
-    kernel_link_action(ctx, dep_closure, entry, output, base_keys = base_keys)
+    link_dep_closure = dep_closure
+    if base_dill != None and base_keys != None:
+        user_kmod_paths = {
+            f.path: True
+            for k in dep_kernels
+            if getattr(k, "base_dill", None) == None
+            for f in k.transitive_kmods.to_list()
+        }
+        pruned_paths = {f.path: True for f in base_kmods.to_list()}
+        for f in unseeded_base_kmods.to_list():
+            if f.path not in user_kmod_paths:
+                pruned_paths[f.path] = True
+        if pruned_paths:
+            link_dep_closure = depset(
+                [f for f in dep_closure.to_list() if f.path not in pruned_paths],
+                order = "postorder",
+            )
+    kernel_link_action(ctx, link_dep_closure, entry, output, base_keys = base_keys)
     return base_dill
+
+_TEST_API_BASE_PACKAGES = {
+    "async": True,
+    "boolean_selector": True,
+    "collection": True,
+    "coverage": True,
+    "file": True,
+    "glob": True,
+    "matcher": True,
+    "meta": True,
+    "package_config": True,
+    "path": True,
+    "pool": True,
+    "source_maps": True,
+    "source_span": True,
+    "stack_trace": True,
+    "stream_channel": True,
+    "string_scanner": True,
+    "term_glyph": True,
+    "test": True,
+    "test_api": True,
+    "vm_service": True,
+    "yaml": True,
+}
+
+def _kmod_pkg_name(kmod):
+    name = kmod.basename
+    return name[:-len(".kmod")] if name.endswith(".kmod") else name
 
 def library_kernel_info(
         ctx,
@@ -975,13 +1030,30 @@ def library_kernel_info(
     )
     base_dill = None
     base_keys = None
+    base_kmods = depset()
+    unseeded_base_kmods = depset()
     for k in dep_kernels:
         kd = getattr(k, "base_dill", None)
         kk = getattr(k, "base_keys", None)
         if kd != None and kk != None:
             base_dill = kd
             base_keys = kk
+            base_kmods = getattr(k, "base_kmods", depset())
+            unseeded_base_kmods = getattr(k, "unseeded_base_kmods", depset())
             break
+    if base_dill != None:
+        non_base_kmod_paths = {
+            f.path: True
+            for k in dep_kernels
+            if getattr(k, "base_dill", None) == None
+            for f in k.transitive_kmods.to_list()
+        }
+        if non_base_kmod_paths:
+            unseeded_base_kmods = depset([
+                f
+                for f in unseeded_base_kmods.to_list()
+                if f.path not in non_base_kmod_paths
+            ])
     if not own_srcs:
         # A façade: nothing to compile, but its dependencies' modules still link.
         return DartKernelInfo(
@@ -996,6 +1068,8 @@ def library_kernel_info(
             edges = edges,
             base_dill = base_dill,
             base_keys = base_keys,
+            base_kmods = base_kmods,
+            unseeded_base_kmods = unseeded_base_kmods,
         )
 
     kmod = ctx.actions.declare_directory(ctx.label.name + ".kmod")
@@ -1027,14 +1101,26 @@ def library_kernel_info(
     if package_name == "test" and target == "vm" and hasattr(ctx.executable, "_kernel_link"):
         base_dill = ctx.actions.declare_file(ctx.label.name + ".base.dill")
         base_keys = ctx.actions.declare_file(ctx.label.name + ".base.keys")
+        seed_kmods = [kmod] + [
+            k
+            for k in dep_closure.to_list()
+            if _kmod_pkg_name(k) in _TEST_API_BASE_PACKAGES
+        ]
+        unseeded_kmods = [
+            k
+            for k in dep_closure.to_list()
+            if _kmod_pkg_name(k) not in _TEST_API_BASE_PACKAGES
+        ]
         kernel_link_action(
             ctx,
             dep_closure,
             entry = None,
             output = base_dill,
-            seed_modules = [kmod],
+            seed_modules = seed_kmods,
             write_keys = base_keys,
         )
+        base_kmods = depset(seed_kmods)
+        unseeded_base_kmods = depset(unseeded_kmods)
     return DartKernelInfo(
         kmod = kmod,
         koutline = koutline,
@@ -1047,4 +1133,6 @@ def library_kernel_info(
         edges = edges,
         base_dill = base_dill,
         base_keys = base_keys,
+        base_kmods = base_kmods,
+        unseeded_base_kmods = unseeded_base_kmods,
     )
