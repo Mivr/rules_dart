@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 
 import 'dill_outline.dart' show Tag, stripDillToOutline;
+import 'kernel_link.dart' show KernelLinkCache, linkOne;
 import 'kernel_module.dart'
     show ModuleCompiler, ModuleOutcome, compileModule, scanDirectives;
 
@@ -837,5 +838,133 @@ void main() {
       ['dep/lib/ext.dart'],
       reason: 'entry index imports must only list external module keys, not entry own sources',
     );
+  });
+
+  test('KernelLinkCache detects in-place mutations with identical size and mtime when digests are absent', () {
+    final cache = KernelLinkCache();
+    final modDir = Directory('${_root.path}/kmod')..createSync(recursive: true);
+    final indexFile = File('${modDir.path}/index.json');
+    final dillFile = File('${modDir.path}/0.dill');
+    final baseKeysFile = File('${_root.path}/base.keys');
+    final outFile = File('${_root.path}/linked.dill');
+
+    final indexV1 = jsonEncode({
+      'version': 1,
+      'sccs': [
+        {
+          'dill': '0.dill',
+          'defines': ['pkg/lib/a.dart'],
+          'imports': <String>[],
+        },
+      ],
+    });
+    final indexV2 = jsonEncode({
+      'version': 1,
+      'sccs': [
+        {
+          'dill': '0.dill',
+          'defines': ['pkg/lib/b.dart'],
+          'imports': <String>[],
+        },
+      ],
+    });
+    expect(indexV1.length, indexV2.length);
+
+    final fixedTime = DateTime.fromMillisecondsSinceEpoch(1700000000000);
+    indexFile.writeAsStringSync(indexV1);
+    indexFile.setLastModifiedSync(fixedTime);
+
+    dillFile.writeAsBytesSync([1, 2, 3, 4]);
+    dillFile.setLastModifiedSync(fixedTime);
+
+    baseKeysFile.writeAsStringSync('pkg/lib/x.dart\n');
+    baseKeysFile.setLastModifiedSync(fixedTime);
+
+    final err1 = StringBuffer();
+    expect(
+      linkOne(
+        [outFile.path, modDir.path],
+        cache: cache,
+        inputs: null,
+        errSink: err1,
+      ),
+      0,
+    );
+    expect(outFile.readAsBytesSync(), [1, 2, 3, 4]);
+    expect(cache.baseKeysOf(baseKeysFile.path, null), {'pkg/lib/x.dart'});
+
+    // Mutate index.json, 0.dill, and base.keys in-place with identical size and mtime.
+    indexFile.writeAsStringSync(indexV2);
+    indexFile.setLastModifiedSync(fixedTime);
+    expect(indexFile.statSync().size, indexV1.length);
+    expect(indexFile.statSync().modified, fixedTime);
+
+    dillFile.writeAsBytesSync([9, 8, 7, 6]);
+    dillFile.setLastModifiedSync(fixedTime);
+    expect(dillFile.statSync().size, 4);
+    expect(dillFile.statSync().modified, fixedTime);
+
+    baseKeysFile.writeAsStringSync('pkg/lib/y.dart\n');
+    baseKeysFile.setLastModifiedSync(fixedTime);
+    expect(baseKeysFile.statSync().modified, fixedTime);
+
+    final err2 = StringBuffer();
+    expect(
+      linkOne(
+        [outFile.path, modDir.path],
+        cache: cache,
+        inputs: const {},
+        errSink: err2,
+      ),
+      0,
+    );
+    expect(
+      outFile.readAsBytesSync(),
+      [9, 8, 7, 6],
+      reason: 'dillBytesOf must not return stale bytes on same-(size, mtime) mutation',
+    );
+    expect(
+      cache.kernelsOf(modDir.path, const {}).single.defines,
+      ['pkg/lib/b.dart'],
+      reason: 'kernelsOf must not return stale index.json on same-(size, mtime) mutation',
+    );
+    expect(
+      cache.baseKeysOf(baseKeysFile.path, const {}),
+      {'pkg/lib/y.dart'},
+      reason: 'baseKeysOf must not return stale keys on same-(size, mtime) mutation',
+    );
+  });
+
+  test('KernelLinkCache normalizes ./ prefixes when matching WorkRequest.inputs digests', () {
+    final cache = KernelLinkCache();
+    final prevCwd = Directory.current;
+    Directory.current = _root;
+    try {
+      Directory('norm_mod').createSync(recursive: true);
+      final dillFile = File('norm_mod/0.dill')..writeAsBytesSync([10, 20, 30]);
+      final digest1 = Uint8List.fromList([1, 1, 1, 1]);
+      final digest2 = Uint8List.fromList([2, 2, 2, 2]);
+
+      // Populate cache using './norm_mod/0.dill' while inputs key is 'norm_mod/0.dill'.
+      final bytes1 = cache.dillBytesOf('./norm_mod/0.dill', {
+        'norm_mod/0.dill': digest1,
+      });
+      expect(bytes1, [10, 20, 30]);
+
+      // Overwrite on disk, but pass the SAME digest1 via normalized key: should hit cache.
+      dillFile.writeAsBytesSync([40, 50, 60]);
+      final cachedHit = cache.dillBytesOf('./norm_mod/0.dill', {
+        'norm_mod/0.dill': digest1,
+      });
+      expect(cachedHit, [10, 20, 30]);
+
+      // Pass a new digest2: should invalidate and read new bytes from disk.
+      final updated = cache.dillBytesOf('./norm_mod/0.dill', {
+        'norm_mod/0.dill': digest2,
+      });
+      expect(updated, [40, 50, 60]);
+    } finally {
+      Directory.current = prevCwd;
+    }
   });
 }

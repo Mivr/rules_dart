@@ -178,8 +178,22 @@ dart_test(
     size = "small",
     srcs = [
         "dill_outline.dart",
+        "kernel_link.dart",
         "kernel_module.dart",
     ],
     main = "kernel_module_test.dart",
     deps = ["@ext_pub_deps//:test"],
+)
+
+dart_test(
+    name = "analyzer_summary_test",
+    size = "small",
+    srcs = ["analyzer_summary.dart"],
+    main = "analyzer_summary_test.dart",
+    deps = [
+        "//third_party/dart_linter:linter",
+        "@ext_pub_deps//:analyzer",
+        "@ext_pub_deps//:path",
+        "@ext_pub_deps//:test",
+    ],
 )

@@ -47,15 +47,36 @@ class _Kernel {
 }
 
 class _CachedEntry<T> {
-  _CachedEntry(this.value, this.digest, this.size, this.modifiedMicros);
+  _CachedEntry(this.value, this.digest, this.rawBytes);
 
   final T value;
   final Uint8List? digest;
-  final int size;
-  final int modifiedMicros;
+  final Uint8List rawBytes;
 }
 
-class _KernelLinkCache {
+String _normalizePath(String path) {
+  if (path.isEmpty) return '.';
+  final isAbs = path.startsWith('/');
+  final parts = path.split('/');
+  final stack = <String>[];
+  for (final part in parts) {
+    if (part.isEmpty || part == '.') continue;
+    if (part == '..') {
+      if (stack.isNotEmpty && stack.last != '..') {
+        stack.removeLast();
+      } else if (!isAbs) {
+        stack.add('..');
+      }
+    } else {
+      stack.add(part);
+    }
+  }
+  if (stack.isEmpty) return isAbs ? '/' : '.';
+  final joined = stack.join('/');
+  return isAbs ? '/$joined' : joined;
+}
+
+class KernelLinkCache {
   final _indexCache = <String, _CachedEntry<List<_Kernel>>>{};
   final _baseKeysCache = <String, _CachedEntry<Set<String>>>{};
   final _dillCache = <String, _CachedEntry<Uint8List>>{};
@@ -64,7 +85,7 @@ class _KernelLinkCache {
   static const int _maxIndexEntries = 4096;
   static const int _maxBaseKeysEntries = 256;
 
-  static bool _sameDigest(Uint8List a, Uint8List b) {
+  static bool _sameBytes(Uint8List a, Uint8List b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
@@ -72,14 +93,33 @@ class _KernelLinkCache {
     return true;
   }
 
-  static Uint8List? _lookupDigest(String path, Map<String, Uint8List>? inputs) {
-    if (inputs == null) return null;
+  static Uint8List? _lookupExactOrNormalized(
+    String path,
+    Map<String, Uint8List> inputs,
+  ) {
     final direct = inputs[path];
     if (direct != null && direct.isNotEmpty) return direct;
-    final slash = path.lastIndexOf('/');
+    final norm = _normalizePath(path);
+    if (norm != path) {
+      final normHit = inputs[norm];
+      if (normHit != null && normHit.isNotEmpty) return normHit;
+    }
+    if (!norm.startsWith('/')) {
+      final dotHit = inputs['./$norm'];
+      if (dotHit != null && dotHit.isNotEmpty) return dotHit;
+    }
+    return null;
+  }
+
+  static Uint8List? _lookupDigest(String path, Map<String, Uint8List>? inputs) {
+    if (inputs == null) return null;
+    final direct = _lookupExactOrNormalized(path, inputs);
+    if (direct != null) return direct;
+    final norm = _normalizePath(path);
+    final slash = norm.lastIndexOf('/');
     if (slash > 0) {
-      final parent = inputs[path.substring(0, slash)];
-      if (parent != null && parent.isNotEmpty) return parent;
+      final parent = _lookupExactOrNormalized(norm.substring(0, slash), inputs);
+      if (parent != null) return parent;
     }
     return null;
   }
@@ -88,32 +128,25 @@ class _KernelLinkCache {
     final indexPath = '$dir/index.json';
     final digest = _lookupDigest(indexPath, inputs);
     final cached = _indexCache.remove(dir);
-    if (cached != null) {
-      if (digest != null &&
-          digest.isNotEmpty &&
-          cached.digest != null &&
-          cached.digest!.isNotEmpty) {
-        if (_sameDigest(digest, cached.digest!)) {
-          _indexCache[dir] = cached;
-          return cached.value;
-        }
-      } else {
-        final stat = File(indexPath).statSync();
-        if (stat.size == cached.size &&
-            stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
-          _indexCache[dir] = _CachedEntry(
-            cached.value,
-            digest ?? cached.digest,
-            cached.size,
-            cached.modifiedMicros,
-          );
-          return cached.value;
-        }
-      }
+    if (cached != null &&
+        digest != null &&
+        digest.isNotEmpty &&
+        cached.digest != null &&
+        cached.digest!.isNotEmpty &&
+        _sameBytes(digest, cached.digest!)) {
+      _indexCache[dir] = cached;
+      return cached.value;
     }
-    final file = File(indexPath);
-    final stat = file.statSync();
-    final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+    final bytes = File(indexPath).readAsBytesSync();
+    if (cached != null && _sameBytes(bytes, cached.rawBytes)) {
+      _indexCache[dir] = _CachedEntry(
+        cached.value,
+        (digest != null && digest.isNotEmpty) ? digest : cached.digest,
+        cached.rawBytes,
+      );
+      return cached.value;
+    }
+    final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
     final kernels = [
       for (final scc in (json['sccs'] as List).cast<Map<String, dynamic>>())
         _Kernel(
@@ -128,43 +161,36 @@ class _KernelLinkCache {
     }
     _indexCache[dir] = _CachedEntry(
       kernels,
-      digest,
-      stat.size,
-      stat.modified.microsecondsSinceEpoch,
+      (digest != null && digest.isNotEmpty) ? digest : null,
+      bytes,
     );
     return kernels;
   }
 
   Set<String> baseKeysOf(String path, Map<String, Uint8List>? inputs) {
+    final key = _normalizePath(path);
     final digest = _lookupDigest(path, inputs);
-    final cached = _baseKeysCache.remove(path);
-    if (cached != null) {
-      if (digest != null &&
-          digest.isNotEmpty &&
-          cached.digest != null &&
-          cached.digest!.isNotEmpty) {
-        if (_sameDigest(digest, cached.digest!)) {
-          _baseKeysCache[path] = cached;
-          return cached.value;
-        }
-      } else {
-        final stat = File(path).statSync();
-        if (stat.size == cached.size &&
-            stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
-          _baseKeysCache[path] = _CachedEntry(
-            cached.value,
-            digest ?? cached.digest,
-            cached.size,
-            cached.modifiedMicros,
-          );
-          return cached.value;
-        }
-      }
+    final cached = _baseKeysCache.remove(key);
+    if (cached != null &&
+        digest != null &&
+        digest.isNotEmpty &&
+        cached.digest != null &&
+        cached.digest!.isNotEmpty &&
+        _sameBytes(digest, cached.digest!)) {
+      _baseKeysCache[key] = cached;
+      return cached.value;
     }
-    final file = File(path);
-    final stat = file.statSync();
+    final bytes = File(path).readAsBytesSync();
+    if (cached != null && _sameBytes(bytes, cached.rawBytes)) {
+      _baseKeysCache[key] = _CachedEntry(
+        cached.value,
+        (digest != null && digest.isNotEmpty) ? digest : cached.digest,
+        cached.rawBytes,
+      );
+      return cached.value;
+    }
     final keys = <String>{};
-    for (final line in file.readAsLinesSync()) {
+    for (final line in const LineSplitter().convert(utf8.decode(bytes))) {
       final trimmed = line.trim();
       if (trimmed.isNotEmpty) keys.add(trimmed);
     }
@@ -172,45 +198,40 @@ class _KernelLinkCache {
         _baseKeysCache.isNotEmpty) {
       _baseKeysCache.remove(_baseKeysCache.keys.first);
     }
-    _baseKeysCache[path] = _CachedEntry(
+    _baseKeysCache[key] = _CachedEntry(
       keys,
-      digest,
-      stat.size,
-      stat.modified.microsecondsSinceEpoch,
+      (digest != null && digest.isNotEmpty) ? digest : null,
+      bytes,
     );
     return keys;
   }
 
   Uint8List dillBytesOf(String path, Map<String, Uint8List>? inputs) {
+    final key = _normalizePath(path);
     final digest = _lookupDigest(path, inputs);
-    final cached = _dillCache.remove(path);
+    final cached = _dillCache.remove(key);
     if (cached != null) {
       if (digest != null &&
           digest.isNotEmpty &&
           cached.digest != null &&
-          cached.digest!.isNotEmpty) {
-        if (_sameDigest(digest, cached.digest!)) {
-          _dillCache[path] = cached;
-          return cached.value;
-        }
-      } else {
-        final stat = File(path).statSync();
-        if (stat.size == cached.size &&
-            stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
-          _dillCache[path] = _CachedEntry(
-            cached.value,
-            digest ?? cached.digest,
-            cached.size,
-            cached.modifiedMicros,
-          );
-          return cached.value;
-        }
+          cached.digest!.isNotEmpty &&
+          _sameBytes(digest, cached.digest!)) {
+        _dillCache[key] = cached;
+        return cached.value;
       }
       _dillBytesTotal -= cached.value.length;
     }
-    final file = File(path);
-    final stat = file.statSync();
-    final bytes = file.readAsBytesSync();
+    final bytes = File(path).readAsBytesSync();
+    if (cached != null && _sameBytes(bytes, cached.value)) {
+      final reused = _CachedEntry(
+        cached.value,
+        (digest != null && digest.isNotEmpty) ? digest : cached.digest,
+        cached.value,
+      );
+      _dillCache[key] = reused;
+      _dillBytesTotal += cached.value.length;
+      return cached.value;
+    }
     if (bytes.length <= 16 * 1024 * 1024) {
       while (_dillBytesTotal + bytes.length > _maxDillCacheBytes &&
           _dillCache.isNotEmpty) {
@@ -218,11 +239,10 @@ class _KernelLinkCache {
         final removed = _dillCache.remove(oldestKey)!;
         _dillBytesTotal -= removed.value.length;
       }
-      _dillCache[path] = _CachedEntry(
+      _dillCache[key] = _CachedEntry(
         bytes,
-        digest,
-        stat.size,
-        stat.modified.microsecondsSinceEpoch,
+        (digest != null && digest.isNotEmpty) ? digest : null,
+        bytes,
       );
       _dillBytesTotal += bytes.length;
     }
@@ -248,13 +268,13 @@ Future<void> main(List<String> args) async {
     await _runPersistentWorker();
     return;
   }
-  final cache = _KernelLinkCache();
-  final code = _linkOne(expanded, cache: cache, errSink: stderr);
+  final cache = KernelLinkCache();
+  final code = linkOne(expanded, cache: cache, errSink: stderr);
   if (code != 0) exit(code);
 }
 
 Future<void> _runPersistentWorker() async {
-  final cache = _KernelLinkCache();
+  final cache = KernelLinkCache();
   await for (final bytes in _Frames(stdin)) {
     final request = _WorkRequest.read(bytes);
     if (request.cancel) continue;
@@ -262,7 +282,7 @@ Future<void> _runPersistentWorker() async {
     var code = 1;
     try {
       final expanded = _expandParamFiles(request.arguments);
-      code = _linkOne(
+      code = linkOne(
         expanded,
         cache: cache,
         inputs: request.inputs,
@@ -285,9 +305,9 @@ Future<void> _runPersistentWorker() async {
   }
 }
 
-int _linkOne(
+int linkOne(
   List<String> rawArgs, {
-  required _KernelLinkCache cache,
+  required KernelLinkCache cache,
   Map<String, Uint8List>? inputs,
   required StringSink errSink,
 }) {

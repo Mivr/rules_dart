@@ -63,7 +63,7 @@ Future<void> main(List<String> rawArgs) async {
     await _runPersistentWorker();
     exit(0);
   }
-  final code = await _runSingleRequest(
+  final code = await runSingleRequest(
     args,
     outSink: stdout,
     errSink: stderr,
@@ -77,7 +77,7 @@ Future<void> main(List<String> rawArgs) async {
 Future<void> _runPersistentWorker() async {
   _ensureLintRulesRegistered();
   final disableCache = Platform.environment['ANALYZER_SUMMARY_NO_CACHE'] == '1';
-  final summaryCache = _SummaryByteCache();
+  final summaryCache = SummaryByteCache();
 
   await for (final bytes in _Frames(stdin)) {
     final request = _WorkRequest.read(bytes);
@@ -93,7 +93,7 @@ Future<void> _runPersistentWorker() async {
         provider = PhysicalResourceProvider.INSTANCE;
       } else {
         summaryCache.beginRequest(request.inputs);
-        provider = _SummaryCachingResourceProvider(
+        provider = SummaryCachingResourceProvider(
           PhysicalResourceProvider.INSTANCE,
           summaryCache,
         );
@@ -101,7 +101,7 @@ Future<void> _runPersistentWorker() async {
       final requestInputPaths = <String>{
         for (final key in request.inputs.keys) p.normalize(p.absolute(key)),
       };
-      exitCode = await _runSingleRequest(
+      exitCode = await runSingleRequest(
         expandedArgs,
         outSink: output,
         errSink: output,
@@ -126,7 +126,7 @@ Future<void> _runPersistentWorker() async {
 }
 
 /// Executes a single `sdk`, `summarize`, or `analyze` invocation.
-Future<int> _runSingleRequest(
+Future<int> runSingleRequest(
   List<String> args, {
   required StringSink outSink,
   required StringSink errSink,
@@ -145,7 +145,7 @@ Future<int> _runSingleRequest(
   }
   try {
     return switch (args.first) {
-      'sdk' => await _sdk(parsed),
+      'sdk' => await _sdk(parsed, resourceProvider: resourceProvider),
       'summarize' => await _summarize(
         parsed,
         errSink: errSink,
@@ -178,17 +178,59 @@ int _usageError(StringSink errSink, String message) {
 /// `--embedder-yaml` is given, the embedder's libraries (Flutter's `dart:ui`,
 /// from `sky_engine`'s `lib/_embedder.yaml`) are built into the summary as
 /// well.
-Future<int> _sdk(_Args args) async {
+Future<int> _sdk(
+  _Args args, {
+  required fs.ResourceProvider resourceProvider,
+}) async {
+  final sdkPath = p.normalize(p.absolute(args.single('sdk')));
   final embedder = args.all('embedder-yaml');
+  final embedderYamlPath = embedder.isEmpty
+      ? null
+      : p.normalize(p.absolute(embedder.single));
+  final boundedProvider = BoundedResourceProvider(
+    resourceProvider,
+    primaryRoot: sdkPath,
+    boundaryRoots: {
+      sdkPath,
+      if (embedderYamlPath != null) p.dirname(embedderYamlPath),
+    },
+    allowedFiles: {if (embedderYamlPath != null) embedderYamlPath},
+    blockAnalysisOptions: true,
+  );
   final bytes = await buildSdkSummary(
-    resourceProvider: PhysicalResourceProvider.INSTANCE,
-    sdkPath: p.normalize(p.absolute(args.single('sdk'))),
-    embedderYamlPath: embedder.isEmpty
-        ? null
-        : p.normalize(p.absolute(embedder.single)),
+    resourceProvider: boundedProvider,
+    sdkPath: sdkPath,
+    embedderYamlPath: embedderYamlPath,
   );
   File(args.single('out')).writeAsBytesSync(bytes);
   return 0;
+}
+
+/// Infers the staged summary root directory from `--source` and `--uri` pairs.
+String _inferSummarizeRoot(List<String> normSources, List<String> uris) {
+  var root = p.dirname(normSources.first);
+  final firstUri = Uri.tryParse(uris.first);
+  if (firstUri != null &&
+      firstUri.scheme == 'package' &&
+      firstUri.pathSegments.length > 1) {
+    final relSegments = firstUri.pathSegments.length - 1;
+    var candidate = normSources.first;
+    for (var i = 0; i < relSegments; i++) {
+      final parent = p.dirname(candidate);
+      if (parent == candidate) break;
+      candidate = parent;
+    }
+    root = candidate;
+  }
+  for (final src in normSources) {
+    final srcDir = p.dirname(src);
+    while (!p.equals(root, srcDir) && !p.isWithin(root, srcDir)) {
+      final parent = p.dirname(root);
+      if (parent == root) break;
+      root = parent;
+    }
+  }
+  return root;
 }
 
 /// Writes the summary of one package's libraries.
@@ -210,19 +252,39 @@ Future<int> _summarize(
       'summarize needs a --source for each --uri, and at least one of each',
     );
   }
-  final libraryUris = <String>[
-    for (var i = 0; i < sources.length; i++)
-      if (!_isPart(sources[i])) uris[i],
+  final normSources = <String>[
+    for (final s in sources) p.normalize(p.absolute(s)),
   ];
+  final libraryUris = <String>[
+    for (var i = 0; i < normSources.length; i++)
+      if (!_isPart(normSources[i])) uris[i],
+  ];
+  final sdkPath = p.normalize(p.absolute(args.single('sdk')));
+  final sdkSummaryPath = p.normalize(p.absolute(args.single('sdk-summary')));
+  final packagesPath = p.normalize(p.absolute(args.single('packages')));
+  final summaryPaths = <String>[
+    for (final s in args.all('summary')) p.normalize(p.absolute(s)),
+  ];
+  final sourceRoot = _inferSummarizeRoot(normSources, uris);
+  final boundedProvider = BoundedResourceProvider(
+    resourceProvider,
+    primaryRoot: sourceRoot,
+    boundaryRoots: {sourceRoot, p.dirname(packagesPath), sdkPath},
+    allowedFiles: {
+      packagesPath,
+      sdkSummaryPath,
+      ...summaryPaths,
+      ...normSources,
+    },
+    blockAnalysisOptions: true,
+  );
   final collection = AnalysisContextCollectionImpl(
-    resourceProvider: resourceProvider,
-    includedPaths: [p.normalize(p.absolute(sources.first))],
-    sdkPath: p.normalize(p.absolute(args.single('sdk'))),
-    sdkSummaryPath: p.normalize(p.absolute(args.single('sdk-summary'))),
-    packageConfigFile: p.normalize(p.absolute(args.single('packages'))),
-    librarySummaryPaths: [
-      for (final s in args.all('summary')) p.normalize(p.absolute(s)),
-    ],
+    resourceProvider: boundedProvider,
+    includedPaths: [normSources.first],
+    sdkPath: sdkPath,
+    sdkSummaryPath: sdkSummaryPath,
+    packageConfigFile: packagesPath,
+    librarySummaryPaths: summaryPaths,
   );
   final driver = collection.contexts.single.driver;
   final bytes = await driver.buildPackageBundle(
@@ -260,15 +322,32 @@ Future<int> _analyze(
     project,
     requestInputPaths: requestInputPaths,
   );
+  final sdkPath = p.normalize(p.absolute(args.single('sdk')));
+  final sdkSummaryPath = p.normalize(p.absolute(args.single('sdk-summary')));
+  final packagesPath = p.normalize(p.join(project, _packageConfig));
+  final summaryPaths = <String>[
+    for (final s in args.all('summary')) p.normalize(p.absolute(s)),
+  ];
+  final boundedProvider = BoundedResourceProvider(
+    resourceProvider,
+    primaryRoot: project,
+    boundaryRoots: {project, sdkPath},
+    allowedFiles: {
+      packagesPath,
+      sdkSummaryPath,
+      ...summaryPaths,
+      if (allowedSrcPaths != null) ...allowedSrcPaths,
+      if (requestInputPaths != null) ...requestInputPaths,
+    },
+    blockAnalysisOptions: false,
+  );
   final collection = AnalysisContextCollectionImpl(
-    resourceProvider: resourceProvider,
+    resourceProvider: boundedProvider,
     includedPaths: [project],
-    sdkPath: p.normalize(p.absolute(args.single('sdk'))),
-    sdkSummaryPath: p.normalize(p.absolute(args.single('sdk-summary'))),
-    packageConfigFile: p.normalize(p.join(project, _packageConfig)),
-    librarySummaryPaths: [
-      for (final s in args.all('summary')) p.normalize(p.absolute(s)),
-    ],
+    sdkPath: sdkPath,
+    sdkSummaryPath: sdkSummaryPath,
+    packageConfigFile: packagesPath,
+    librarySummaryPaths: summaryPaths,
   );
   final context = collection.contexts.single;
   final driver = context.driver;
@@ -281,10 +360,12 @@ Future<int> _analyze(
     requestInputPaths: requestInputPaths,
   )) {
     final options = context.getAnalysisOptionsForFile(
-      PhysicalResourceProvider.INSTANCE.getFile(path),
+      boundedProvider.getFile(path),
     );
     if (p.basename(path) == _optionsBasename) {
-      findings.addAll(_optionsFindings(project, driver, path, options));
+      findings.addAll(
+        _optionsFindings(project, driver, path, options, boundedProvider),
+      );
       continue;
     }
     final result = await driver.getErrors(path);
@@ -412,8 +493,9 @@ List<_Finding> _optionsFindings(
   AnalysisDriver driver,
   String path,
   AnalysisOptions options,
+  fs.ResourceProvider resourceProvider,
 ) {
-  final content = File(path).readAsStringSync();
+  final content = resourceProvider.getFile(path).readAsStringSync();
   final source = driver.sourceFactory.forUri2(Uri.file(path));
   if (source == null) return const [];
   final validator = AnalysisOptionsAnalyzer(
@@ -421,7 +503,7 @@ List<_Finding> _optionsFindings(
     sourceFactory: driver.sourceFactory,
     contextRoot: project,
     sdkVersionConstraint: null,
-    resourceProvider: PhysicalResourceProvider.INSTANCE,
+    resourceProvider: resourceProvider,
   );
   final lines = LineInfo.fromContent(content);
   return [
@@ -601,30 +683,357 @@ List<String> _expandParamFiles(List<String> args) {
 }
 
 // ---------------------------------------------------------------------------
+// Bounded ResourceProvider confining upward ContextLocator directory walks.
+// ---------------------------------------------------------------------------
+
+/// Wraps an [fs.ResourceProvider] so `package:analyzer`'s `ContextLocatorImpl`,
+/// `BlazeWorkspace.find`, and `PackageConfigWorkspace.find` cannot walk above
+/// the action's declared roots (`primaryRoot` and `boundaryRoots`) or probe
+/// ambient ancestor workspace/configuration files (`analysis_options.yaml`,
+/// `pubspec.yaml`, `BUILD.gn`, `WORKSPACE`, `blaze-out`, `.dart_tool`, etc.).
+final class BoundedResourceProvider implements fs.ResourceProvider {
+  BoundedResourceProvider(
+    this._delegate, {
+    required String primaryRoot,
+    Set<String> boundaryRoots = const {},
+    Set<String> allowedFiles = const {},
+    this.blockAnalysisOptions = false,
+  }) : primaryRoot = p.normalize(p.absolute(primaryRoot)),
+       boundaryRoots = {
+         p.normalize(p.absolute(primaryRoot)),
+         for (final r in boundaryRoots) p.normalize(p.absolute(r)),
+       },
+       allowedFiles = {
+         for (final f in allowedFiles) p.normalize(p.absolute(f)),
+       };
+
+  final fs.ResourceProvider _delegate;
+  final String primaryRoot;
+  final Set<String> boundaryRoots;
+  final Set<String> allowedFiles;
+  final bool blockAnalysisOptions;
+
+  static const Set<String> _alwaysBlockedWorkspaceBasenames = {
+    'BUILD.gn',
+    'WORKSPACE',
+    'WORKSPACE.bazel',
+    'blaze-out',
+    'blaze-bin',
+    'blaze-genfiles',
+    'READONLY',
+  };
+
+  static const Set<String> _ancestorProbeBasenames = {
+    'analysis_options.yaml',
+    '.analysis_options',
+    'pubspec.yaml',
+    '.packages',
+    'package_config.json',
+    '.dart_tool',
+    'BUILD',
+    'BUILD.bazel',
+    'MODULE.bazel',
+  };
+
+  bool isBoundaryFolder(String normPath) =>
+      boundaryRoots.contains(normPath) || p.isWithin(normPath, primaryRoot);
+
+  bool isBlockedPath(String rawPath) {
+    final normPath = p.normalize(p.absolute(rawPath));
+    if (allowedFiles.contains(normPath)) {
+      return false;
+    }
+    final base = p.basename(normPath);
+    if (blockAnalysisOptions &&
+        (base == _optionsBasename || base == '.analysis_options')) {
+      return true;
+    }
+    if (!p.equals(normPath, primaryRoot) &&
+        !p.isWithin(primaryRoot, normPath)) {
+      if (_alwaysBlockedWorkspaceBasenames.contains(base)) {
+        return true;
+      }
+      final parentDir = p.dirname(normPath);
+      if (p.isWithin(parentDir, primaryRoot) ||
+          boundaryRoots.contains(parentDir)) {
+        if (_ancestorProbeBasenames.contains(base)) {
+          return true;
+        }
+        // Also block `<ancestor>/.dart_tool/package_config.json`.
+        if (p.basename(parentDir) == '.dart_tool' &&
+            (p.isWithin(p.dirname(parentDir), primaryRoot) ||
+                boundaryRoots.contains(p.dirname(parentDir)))) {
+          return true;
+        }
+      } else if (p.basename(parentDir) == '.dart_tool') {
+        final grandParent = p.dirname(parentDir);
+        if (p.isWithin(grandParent, primaryRoot) ||
+            boundaryRoots.contains(grandParent)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  @override
+  p.Context get pathContext => _delegate.pathContext;
+
+  @override
+  fs.File getFile(String path) => _BoundedFile(this, _delegate.getFile(path));
+
+  @override
+  fs.Folder getFolder(String path) =>
+      _BoundedFolder(this, _delegate.getFolder(path));
+
+  @override
+  fs.Link getLink(String path) => _delegate.getLink(path);
+
+  @override
+  fs.Resource getResource(String path) {
+    final normPath = p.normalize(p.absolute(path));
+    if (isBlockedPath(normPath)) {
+      return _BoundedFile(this, _delegate.getFile(normPath));
+    }
+    final res = _delegate.getResource(path);
+    if (res is fs.Folder) {
+      return _BoundedFolder(this, res);
+    }
+    if (res is fs.File) {
+      return _BoundedFile(this, res);
+    }
+    return res;
+  }
+
+  @override
+  fs.Folder? getStateLocation(String pluginId) =>
+      _delegate.getStateLocation(pluginId);
+}
+
+final class _BoundedFolder implements fs.Folder {
+  const _BoundedFolder(this._provider, this._delegate);
+
+  final BoundedResourceProvider _provider;
+  final fs.Folder _delegate;
+
+  String get _normPath => p.normalize(p.absolute(_delegate.path));
+
+  @override
+  bool get isRoot => _provider.isBoundaryFolder(_normPath) || _delegate.isRoot;
+
+  @override
+  fs.Folder get parent =>
+      isRoot ? this : _BoundedFolder(_provider, _delegate.parent);
+
+  @override
+  bool get exists {
+    if (_provider.isBlockedPath(_normPath)) return false;
+    return _delegate.exists;
+  }
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  fs.ResourceProvider get provider => _provider;
+
+  @override
+  String get shortName => _delegate.shortName;
+
+  @override
+  String canonicalizePath(String path) => _delegate.canonicalizePath(path);
+
+  @override
+  bool contains(String path) => _delegate.contains(path);
+
+  @override
+  fs.Folder copyTo(fs.Folder parentFolder) =>
+      _BoundedFolder(_provider, _delegate.copyTo(parentFolder));
+
+  @override
+  void create() => _delegate.create();
+
+  @override
+  void delete() => _delegate.delete();
+
+  @override
+  fs.Resource getChild(String relPath) =>
+      _provider.getResource(_provider.pathContext.join(path, relPath));
+
+  @override
+  fs.File getChildAssumingFile(String relPath) => getFile(relPath);
+
+  @override
+  fs.Folder getChildAssumingFolder(String relPath) => getFolder(relPath);
+
+  @override
+  fs.File getFile(String relPath) =>
+      _provider.getFile(_provider.pathContext.join(path, relPath));
+
+  @override
+  fs.Folder getFolder(String relPath) =>
+      _provider.getFolder(_provider.pathContext.join(path, relPath));
+
+  @override
+  List<fs.Resource> getChildren() {
+    if (_provider.isBlockedPath(_normPath)) return const [];
+    return [
+      for (final child in _delegate.getChildren())
+        if (!_provider.isBlockedPath(child.path))
+          if (child is fs.Folder)
+            _BoundedFolder(_provider, child)
+          else if (child is fs.File)
+            _BoundedFile(_provider, child)
+          else
+            child,
+    ];
+  }
+
+  @override
+  bool isOrContains(String path) => _delegate.isOrContains(path);
+
+  @override
+  fs.Resource resolveSymbolicLinksSync() {
+    final resolved = _delegate.resolveSymbolicLinksSync();
+    if (resolved is fs.Folder) return _BoundedFolder(_provider, resolved);
+    if (resolved is fs.File) return _BoundedFile(_provider, resolved);
+    return resolved;
+  }
+
+  @override
+  Uri toUri() => _delegate.toUri();
+
+  @override
+  fs.ResourceWatcher watch() => _delegate.watch();
+
+  @override
+  bool operator ==(Object other) => other is fs.Folder && path == other.path;
+
+  @override
+  int get hashCode => path.hashCode;
+}
+
+final class _BoundedFile implements fs.File {
+  const _BoundedFile(this._provider, this._delegate);
+
+  final BoundedResourceProvider _provider;
+  final fs.File _delegate;
+
+  bool get _isBlocked => _provider.isBlockedPath(_delegate.path);
+
+  @override
+  bool get exists {
+    if (_isBlocked) return false;
+    return _delegate.exists;
+  }
+
+  @override
+  int get lengthSync {
+    if (_isBlocked) {
+      throw fs.FileSystemException(path, 'File does not exist');
+    }
+    return _delegate.lengthSync;
+  }
+
+  @override
+  int get modificationStamp {
+    if (_isBlocked) {
+      throw fs.FileSystemException(path, 'File does not exist');
+    }
+    return _delegate.modificationStamp;
+  }
+
+  @override
+  fs.Folder get parent => _BoundedFolder(_provider, _delegate.parent);
+
+  @override
+  String get path => _delegate.path;
+
+  @override
+  fs.ResourceProvider get provider => _provider;
+
+  @override
+  String get shortName => _delegate.shortName;
+
+  @override
+  fs.File copyTo(fs.Folder parentFolder) =>
+      _BoundedFile(_provider, _delegate.copyTo(parentFolder));
+
+  @override
+  void delete() => _delegate.delete();
+
+  @override
+  bool isOrContains(String path) => _delegate.isOrContains(path);
+
+  @override
+  Uint8List readAsBytesSync() {
+    if (_isBlocked) {
+      throw fs.FileSystemException(path, 'File does not exist');
+    }
+    return _delegate.readAsBytesSync();
+  }
+
+  @override
+  String readAsStringSync() {
+    if (_isBlocked) {
+      throw fs.FileSystemException(path, 'File does not exist');
+    }
+    return _delegate.readAsStringSync();
+  }
+
+  @override
+  fs.File renameSync(String newPath) =>
+      _BoundedFile(_provider, _delegate.renameSync(newPath));
+
+  @override
+  fs.Resource resolveSymbolicLinksSync() {
+    if (_isBlocked) {
+      throw fs.FileSystemException(path, 'File does not exist');
+    }
+    final resolved = _delegate.resolveSymbolicLinksSync();
+    if (resolved is fs.File) return _BoundedFile(_provider, resolved);
+    if (resolved is fs.Folder) return _BoundedFolder(_provider, resolved);
+    return resolved;
+  }
+
+  @override
+  Uri toUri() => _delegate.toUri();
+
+  @override
+  fs.ResourceWatcher watch() => _delegate.watch();
+
+  @override
+  void writeAsBytesSync(List<int> bytes) => _delegate.writeAsBytesSync(bytes);
+
+  @override
+  void writeAsStringSync(String content) =>
+      _delegate.writeAsStringSync(content);
+
+  @override
+  bool operator ==(Object other) => other is fs.File && path == other.path;
+
+  @override
+  int get hashCode => path.hashCode;
+}
+
+// ---------------------------------------------------------------------------
 // Per-worker `.sum` byte cache and ResourceProvider wrapper.
 // ---------------------------------------------------------------------------
 
 final class _CachedSumEntry {
-  _CachedSumEntry({
-    required this.bytes,
-    required this.digest,
-    required this.size,
-    required this.modifiedMicros,
-  });
+  _CachedSumEntry({required this.bytes, required this.digest});
 
   final Uint8List bytes;
   final Uint8List? digest;
-  final int size;
-  final int modifiedMicros;
 }
 
 /// Caches `.sum` bundle bytes (`Uint8List`) across worker requests, keyed by
 /// normalized absolute path and validated via `WorkRequest.inputs` digests (or
-/// file size + mtime fallback when no digest is provided).
+/// exact byte content verification when no digest is provided).
 ///
 /// Never caches `.dart`, `.yaml`, or `.json` files: those always go directly to
 /// `PhysicalResourceProvider.INSTANCE`.
-final class _SummaryByteCache {
+final class SummaryByteCache {
   static const int _maxCacheBytes = 256 * 1024 * 1024;
 
   // LinkedHashMap preserves insertion order for simple LRU eviction.
@@ -642,7 +1051,7 @@ final class _SummaryByteCache {
   }
 
   Uint8List readBytes(fs.File delegate) {
-    final path = delegate.path;
+    final path = p.normalize(p.absolute(delegate.path));
     final reqDigest = _currentInputDigests[path];
     final hasReqDigest = reqDigest != null && reqDigest.isNotEmpty;
     final existing = _entries.remove(path);
@@ -656,28 +1065,21 @@ final class _SummaryByteCache {
           _entries[path] = existing;
           return existing.bytes;
         }
-        // Explicit digest mismatch: do not fall back to statSync().
-      } else {
-        // Fallback: check file stat if either digest was absent or empty.
-        final stat = File(path).statSync();
-        if (stat.size == existing.size &&
-            stat.modified.microsecondsSinceEpoch == existing.modifiedMicros) {
-          _entries[path] = hasReqDigest
-              ? _CachedSumEntry(
-                  bytes: existing.bytes,
-                  digest: reqDigest,
-                  size: existing.size,
-                  modifiedMicros: existing.modifiedMicros,
-                )
-              : existing;
-          return existing.bytes;
-        }
       }
       _totalBytes -= existing.bytes.length;
     }
 
     final bytes = delegate.readAsBytesSync();
-    final stat = File(path).statSync();
+    if (existing != null && _bytesEqual(bytes, existing.bytes)) {
+      final reused = _CachedSumEntry(
+        bytes: existing.bytes,
+        digest: hasReqDigest ? reqDigest : existing.digest,
+      );
+      _entries[path] = reused;
+      _totalBytes += existing.bytes.length;
+      return existing.bytes;
+    }
+
     while (_totalBytes + bytes.length > _maxCacheBytes && _entries.isNotEmpty) {
       final oldestKey = _entries.keys.first;
       final removed = _entries.remove(oldestKey)!;
@@ -686,8 +1088,6 @@ final class _SummaryByteCache {
     _entries[path] = _CachedSumEntry(
       bytes: bytes,
       digest: hasReqDigest ? reqDigest : null,
-      size: stat.size,
-      modifiedMicros: stat.modified.microsecondsSinceEpoch,
     );
     _totalBytes += bytes.length;
     return bytes;
@@ -706,11 +1106,11 @@ final class _SummaryByteCache {
 /// on `.sum` files only. All `.dart` sources, `analysis_options.yaml`, and
 /// `package_config.json` files return the underlying physical `fs.File`
 /// directly with zero cross-request caching.
-final class _SummaryCachingResourceProvider implements fs.ResourceProvider {
-  const _SummaryCachingResourceProvider(this._delegate, this._cache);
+final class SummaryCachingResourceProvider implements fs.ResourceProvider {
+  const SummaryCachingResourceProvider(this._delegate, this._cache);
 
   final fs.ResourceProvider _delegate;
-  final _SummaryByteCache _cache;
+  final SummaryByteCache _cache;
 
   @override
   p.Context get pathContext => _delegate.pathContext;
@@ -742,7 +1142,7 @@ final class _CachedSummaryFile implements fs.File {
   const _CachedSummaryFile(this._delegate, this._cache);
 
   final fs.File _delegate;
-  final _SummaryByteCache _cache;
+  final SummaryByteCache _cache;
 
   @override
   Uint8List readAsBytesSync() => _cache.readBytes(_delegate);
