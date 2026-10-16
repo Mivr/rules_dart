@@ -9,7 +9,9 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 
-import 'kernel_module.dart' show ModuleCompiler, ModuleOutcome, compileModule;
+import 'dill_outline.dart' show Tag, stripDillToOutline;
+import 'kernel_module.dart'
+    show ModuleCompiler, ModuleOutcome, compileModule, scanDirectives;
 
 const _prefix = 'org-dartlang-bazel:///';
 
@@ -159,6 +161,168 @@ Future<_Result> _compile(
     code == 0 ? File(excludedPath).readAsStringSync() : '',
     written,
   );
+}
+
+Uint8List _buildMinimalFieldDill() {
+  final out = BytesBuilder();
+  void u30(int v) {
+    assert(v >= 0 && v < 0x80);
+    out.addByte(v);
+  }
+
+  void u32(int v) {
+    out.addByte((v >> 24) & 0xff);
+    out.addByte((v >> 16) & 0xff);
+    out.addByte((v >> 8) & 0xff);
+    out.addByte(v & 0xff);
+  }
+
+  // 18-byte header + problemsAsJson (UInt30(0))
+  u32(0x90abcdef);
+  u32(120);
+  for (var i = 0; i < 10; i++) {
+    out.addByte(0);
+  }
+  u30(0);
+
+  final libStart = out.length;
+  out.addByte(0); // flags
+  u30(3); // major
+  u30(0); // minor
+  u30(1); // canonicalName
+  u30(1); // name
+  u30(0); // fileUri
+  u30(0); // problemsAsJson
+  u30(0); // annotations
+  u30(0); // depCount
+  u30(0); // expCount
+  u30(0); // partCount
+  u30(0); // tdCount
+  u30(1); // clsCount = 1
+
+  final clsStart = out.length;
+  out.addByte(Tag.Class);
+  u30(1); // canonicalName
+  u30(0); // fileUri
+  u30(0);
+  u30(0);
+  u30(0); // 3 offsets
+  u30(0); // flags (not a mixin)
+  u30(1); // name
+  u30(0); // annotations
+  u30(0); // typeParameters
+  out.addByte(Tag.Nothing); // supertype
+  out.addByte(Tag.Nothing); // mixedInType
+  u30(0); // implementedTypes
+
+  // 3 fields: (flags=1 final instance, val=42), (flags=5 static final, val=99), (flags=0 mutable, val=77)
+  u30(3);
+  for (final (flags, val) in [(1, 42), (5, 99), (0, 77)]) {
+    out.addByte(Tag.Field);
+    u30(1);
+    u30(1);
+    u30(0); // 3 canonRefs
+    u30(0); // uriRef
+    u30(0);
+    u30(0); // 2 offsets
+    u30(flags);
+    u30(1); // name ("f")
+    u30(0); // scopeSize
+    u30(0); // annotations
+    out.addByte(Tag.DynamicType);
+    out.addByte(Tag.Nothing); // option variable
+    out.addByte(Tag.Something); // option expression
+    out.addByte(Tag.PositiveIntLiteral);
+    u30(0); // fileOffset
+    u30(val);
+    out.addByte(Tag.Nothing); // option scope
+  }
+  u30(0); // ctorCount = 0
+  u30(0); // pCount = 0
+  final clsProcEnd = out.length;
+  u32(clsProcEnd);
+  u32(0); // procCount = 0
+  final clsEnd = out.length;
+
+  u30(0); // extCount
+  u30(0); // extTypeCount
+  u30(0); // fieldCount
+  u30(0); // pCount
+  final libProcEnd = out.length;
+  final sourceRefsOffset = out.length;
+  u30(0); // usedCount = 0
+  u32(sourceRefsOffset);
+  u32(clsStart);
+  u32(clsEnd);
+  u32(1); // classCount = 1
+  u32(libProcEnd);
+  u32(0); // procCount = 0
+  final libEnd = out.length;
+
+  // Source table
+  final sourceTableOffset = libEnd;
+  u32(1); // uriCount = 1
+  final uriEntry0 = out.length;
+  u30(0); // uriLen
+  u30(0); // srcLen
+  u30(0); // lineCount
+  u30(0); // impLen
+  u30(0); // covCount
+  u32(uriEntry0);
+
+  // Constant table
+  final constantTableOffset = out.length;
+  u30(0); // constCount = 0
+  final constantTableIndexOffset = out.length;
+  u32(0); // constCount = 0
+
+  // Link table
+  final linkTableOffset = out.length;
+  u30(1); // canonCount = 1
+  u30(0); // parent
+  u30(1); // string index 1
+
+  // Metadata
+  final metaOffset = out.length;
+  u32(0);
+
+  // String table: ["", "f"]
+  final stringTableOffset = out.length;
+  u30(2);
+  u30(0);
+  u30(1);
+  out.addByte(102); // "f"
+
+  // Component index
+  final componentIndexOffset = out.length;
+  u32(sourceTableOffset);
+  u32(constantTableOffset);
+  u32(constantTableIndexOffset);
+  u32(linkTableOffset);
+  u32(metaOffset);
+  u32(metaOffset);
+  u32(stringTableOffset);
+  u32(componentIndexOffset);
+  u32(0); // mainMethodReference
+  u32(libStart);
+  u32(libEnd);
+  u32(1); // libraryCount = 1
+  u32(out.length + 4);
+  return out.toBytes();
+}
+
+bool _containsSubsequence(Uint8List haystack, List<int> needle) {
+  for (var i = 0; i <= haystack.length - needle.length; i++) {
+    var match = true;
+    for (var j = 0; j < needle.length; j++) {
+      if (haystack[i + j] != needle[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
+  }
+  return false;
 }
 
 void main() {
@@ -558,5 +722,120 @@ void main() {
       File('$outlineDir/index.json').readAsStringSync(),
     ) as Map<String, dynamic>;
     expect(outlineIndex, result.index);
+  });
+
+  test('stripDillToOutline preserves final instance field initializers and strips static final and mutable field initializers', () {
+    final raw = _buildMinimalFieldDill();
+    final stripped = stripDillToOutline(raw);
+    expect(
+      _containsSubsequence(stripped, [
+        Tag.Something,
+        Tag.PositiveIntLiteral,
+        0,
+        42,
+      ]),
+      isTrue,
+      reason: 'non-static final instance field initializer must be preserved for const constructor evaluation',
+    );
+    expect(
+      _containsSubsequence(stripped, [
+        Tag.Something,
+        Tag.PositiveIntLiteral,
+        0,
+        99,
+      ]),
+      isFalse,
+      reason: 'static final field initializer should be stripped',
+    );
+    expect(
+      _containsSubsequence(stripped, [
+        Tag.Something,
+        Tag.PositiveIntLiteral,
+        0,
+        77,
+      ]),
+      isFalse,
+      reason: 'mutable instance field initializer should be stripped',
+    );
+  });
+
+  test('scanDirectives and compileModule handle shebangs and generic annotations in directive prologues', () async {
+    final scanned = scanDirectives(
+      "#!/usr/bin/env dart\n"
+      "@Tag<int>()\n"
+      "@prefix.Meta<Map<String, List<int>>>.named('x')\n"
+      "library my_lib;\n"
+      "@Annot<String>()\n"
+      "import 'package:pkg/a.dart';\n"
+      "export 'package:pkg/b.dart';\n",
+      {'core', 'async'},
+    );
+    expect(scanned, isNotNull);
+    expect(scanned!.refs.map((r) => r.uri).toList(), [
+      'package:pkg/a.dart',
+      'package:pkg/b.dart',
+    ]);
+
+    _write(
+      'pkg/lib/shebang_web.dart',
+      "#!/usr/bin/env dart\nimport 'dart:html';\nvoid main() {}\n",
+    );
+    _write(
+      'pkg/lib/generic_annot.dart',
+      "@Tag<Map<String, List<int>>>.named()\nimport 'plain.dart';\nclass G {}\n",
+    );
+    _write('pkg/lib/plain.dart', "class Plain {}\n");
+    final result = await _compile('prologue_m', [
+      'pkg/lib/shebang_web.dart',
+      'pkg/lib/generic_annot.dart',
+      'pkg/lib/plain.dart',
+    ]);
+    expect(result.code, 0);
+    expect(result.excluded, {
+      _uri('pkg/lib/shebang_web.dart'): 'dart:html is not a VM library',
+    });
+    expect(result.defines, [
+      ['pkg/lib/plain.dart'],
+      ['pkg/lib/generic_annot.dart'],
+    ]);
+  });
+
+  test('an entry module resolves relative ../lib/ imports under the multi-root scheme and excludes own keys from index imports', () async {
+    _write('dep/lib/ext.dart', 'class Ext {}\n');
+    _write(
+      'pkg/lib/local_helper.dart',
+      "import 'package:dep/ext.dart';\nint helper() => 1;\n",
+    );
+    _write(
+      'pkg/test/my_test.dart',
+      "import '../lib/local_helper.dart';\nvoid main() { helper(); }\n",
+    );
+    final depMod = _module('dep_mod', [
+      _Scc('0.dill', ['dep/lib/ext.dart'], []),
+    ]);
+    final entry = await _compile(
+      'rel_entry',
+      ['pkg/test/my_test.dart', 'pkg/lib/local_helper.dart'],
+      inputKmods: [depMod],
+      noDrop: true,
+    );
+    expect(entry.code, 0);
+    expect(
+      entry.sourcesPerCall.single,
+      containsAll([
+        _uri('pkg/test/my_test.dart'),
+        _uri('pkg/lib/local_helper.dart'),
+      ]),
+      reason: 'relative ../lib/ import from test/ resolves under multi-root scheme in CFE',
+    );
+    final sccImports =
+        ((entry.index['sccs'] as List).single
+                as Map<String, dynamic>)['imports']
+            as List;
+    expect(
+      sccImports,
+      ['dep/lib/ext.dart'],
+      reason: 'entry index imports must only list external module keys, not entry own sources',
+    );
   });
 }

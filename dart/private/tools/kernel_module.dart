@@ -394,7 +394,6 @@ Future<int> compileModule(
           await File(nodeDill).writeAsBytes(outlineBytes);
         }
         await dillFile.writeAsBytes(_stripSourceCodeFromDill(rawBytes));
-        _digestCache.remove(dillPath);
       }
       final node = _Node(nodeDill, scc.imports);
       for (final key in scc.keys) {
@@ -772,6 +771,14 @@ class _EntrySources {
 /// The sources the entry module compiles: its own, and each excluded file it reaches.
 /// An excluded file is compiled from source here, so the compiler reports its genuine
 /// VM error. Every other file it reaches is in a module.
+class _EntryEdge {
+  _EntryEdge(this.from, this.uri, this.target);
+
+  final String from;
+  final String uri;
+  final String target;
+}
+
 Future<_EntrySources> _entrySources(
   List<String> sources,
   Map<String, String> closure,
@@ -781,15 +788,17 @@ Future<_EntrySources> _entrySources(
   String multiRootPrefix,
 ) async {
   final out = <String>[];
+  final ownUris = <String, String>{};
   final imports = <String>{};
   final seen = <String>{};
   final queue = Queue<String>();
+  final edges = <_EntryEdge>[];
   for (final uri in sources) {
     final key = _keyOfUri(uri, roots, multiRootPrefix);
     if (key == null) {
       out.add(uri);
     } else {
-      out.add(_packageUriOf(key, uri, roots));
+      ownUris.putIfAbsent(key, () => uri);
       if (seen.add(key)) queue.add(key);
     }
   }
@@ -800,16 +809,81 @@ Future<_EntrySources> _entrySources(
     if (scan == null) continue;
     for (final ref in scan.refs) {
       if (ref.uri.startsWith('dart:')) continue;
-      final target = _resolveUri(ref.uri, key, roots);
+      final target = _resolveUri(ref.uri, key, roots, multiRootPrefix);
       if (target == null) continue;
+      edges.add(_EntryEdge(key, ref.uri, target));
       imports.add(target);
       if (!seen.add(target)) continue;
       final uri = closure[target];
       if (uri == null) continue;
-      out.add(_packageUriOf(target, uri, roots));
+      ownUris.putIfAbsent(target, () => uri);
       queue.add(target);
     }
   }
+  imports.removeAll(ownUris.keys);
+
+  final usedAsRaw = <String>{};
+  final usedAsPackage = <String>{};
+  ownUris.forEach((key, uri) {
+    final pkgUri = _packageUriOf(key, uri, roots);
+    if (pkgUri == uri) {
+      usedAsRaw.add(key);
+    } else if (uri.startsWith('package:')) {
+      usedAsPackage.add(key);
+    }
+  });
+  for (final edge in edges) {
+    if (!ownUris.containsKey(edge.target)) continue;
+    if (edge.uri.startsWith('package:')) {
+      usedAsPackage.add(edge.target);
+    } else if (edge.uri.startsWith(multiRootPrefix)) {
+      usedAsRaw.add(edge.target);
+    }
+  }
+  var changed = true;
+  while (changed) {
+    changed = false;
+    for (final edge in edges) {
+      if (!ownUris.containsKey(edge.target) || edge.uri.contains(':')) continue;
+      if (usedAsRaw.contains(edge.from) && usedAsRaw.add(edge.target)) {
+        changed = true;
+      }
+    }
+  }
+  ownUris.forEach((key, uri) {
+    if (_packageUriOf(key, uri, roots) != uri && !usedAsRaw.contains(key)) {
+      usedAsPackage.add(key);
+    }
+  });
+  changed = true;
+  while (changed) {
+    changed = false;
+    for (final edge in edges) {
+      if (!ownUris.containsKey(edge.target) || edge.uri.contains(':')) continue;
+      final targetUri = ownUris[edge.target]!;
+      if (usedAsPackage.contains(edge.from) &&
+          _packageUriOf(edge.target, targetUri, roots) != targetUri &&
+          usedAsPackage.add(edge.target)) {
+        changed = true;
+      }
+    }
+  }
+  ownUris.forEach((key, uri) {
+    final pkgUri = _packageUriOf(key, uri, roots);
+    if (pkgUri == uri) {
+      out.add(uri);
+      return;
+    }
+    if (usedAsPackage.contains(key) || !usedAsRaw.contains(key)) {
+      out.add(pkgUri);
+    }
+    if (usedAsRaw.contains(key)) {
+      final rawUri = uri.startsWith(multiRootPrefix)
+          ? uri
+          : '$multiRootPrefix$key';
+      if (rawUri != pkgUri) out.add(rawUri);
+    }
+  });
   return _EntrySources(out, imports.toList()..sort());
 }
 
@@ -946,9 +1020,12 @@ String? _keyOfUri(
 String? _resolveUri(
   String uri,
   String fromKey,
-  Map<String, _PackageRoot> roots,
-) {
-  if (uri.startsWith('package:')) return _keyOfUri(uri, roots);
+  Map<String, _PackageRoot> roots, [
+  String multiRootPrefix = _defaultMultiRootPrefix,
+]) {
+  if (uri.startsWith('package:') || uri.startsWith(multiRootPrefix)) {
+    return _keyOfUri(uri, roots, multiRootPrefix);
+  }
   if (uri.contains(':')) return null;
   final slash = fromKey.lastIndexOf('/');
   final dir = slash < 0 ? '' : fromKey.substring(0, slash + 1);
@@ -1159,6 +1236,13 @@ class _Lexer {
   _Token? _scan() {
     final src = _src;
     final n = src.length;
+    if (_at == 0) {
+      if (src.startsWith('\uFEFF')) _at++;
+      if (src.startsWith('#!', _at)) {
+        final end = src.indexOf('\n', _at);
+        _at = end < 0 ? n : end;
+      }
+    }
     while (_at < n) {
       final ch = src[_at];
       if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
@@ -1277,13 +1361,25 @@ class _Prologue {
     return value;
   }
 
-  /// `@name`, `@name.name` or `@name(...)`.
+  /// `@name`, `@name.name`, `@name<...>(...)`, or `@name<...>.name(...)`.
   void _annotation() {
     _expect('@');
     _identToken();
     while (_punct('.')) {
       _lexer.take();
       _identToken();
+    }
+    if (_punct('<')) {
+      var depth = 0;
+      do {
+        final token = _take();
+        if (token.kind == _punctKind && token.text == '<') depth++;
+        if (token.kind == _punctKind && token.text == '>') depth--;
+      } while (depth > 0);
+      while (_punct('.')) {
+        _lexer.take();
+        _identToken();
+      }
     }
     if (_punct('(')) {
       var depth = 0;
@@ -1608,30 +1704,9 @@ const _requestTimeoutFlag = '--request-timeout-seconds=';
 // same SHA-256 that Bazel uses for a file, and keeps the digest while the file's size
 // and modification time hold: a kernel is hashed once, when it is written.
 
-/// The digest of the file at a path, and the file state it was computed from.
-class _Digested {
-  _Digested(this.size, this.modified, this.digest);
-
-  final int size;
-  final int modified;
-  final Uint8List digest;
-}
-
-final _digestCache = <String, _Digested>{};
-
-/// The SHA-256 digest of the file at `path`, from the cache when the file is unchanged.
-Future<Uint8List> _digestOf(String path) async {
-  final file = File(path);
-  final stat = await file.stat();
-  final modified = stat.modified.microsecondsSinceEpoch;
-  final known = _digestCache[path];
-  if (known != null && known.size == stat.size && known.modified == modified) {
-    return known.digest;
-  }
-  final digest = sha256Of(await file.readAsBytes());
-  _digestCache[path] = _Digested(stat.size, modified, digest);
-  return digest;
-}
+/// The SHA-256 digest of the file at `path`.
+Future<Uint8List> _digestOf(String path) async =>
+    sha256Of(await File(path).readAsBytes());
 
 /// The SHA-256 digest of `message`, as 32 bytes.
 Uint8List sha256Of(Uint8List message) {

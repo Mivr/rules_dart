@@ -61,6 +61,8 @@ class _KernelLinkCache {
   final _dillCache = <String, _CachedEntry<Uint8List>>{};
   int _dillBytesTotal = 0;
   static const int _maxDillCacheBytes = 128 * 1024 * 1024;
+  static const int _maxIndexEntries = 4096;
+  static const int _maxBaseKeysEntries = 256;
 
   static bool _sameDigest(Uint8List a, Uint8List b) {
     if (a.length != b.length) return false;
@@ -70,21 +72,43 @@ class _KernelLinkCache {
     return true;
   }
 
+  static Uint8List? _lookupDigest(String path, Map<String, Uint8List>? inputs) {
+    if (inputs == null) return null;
+    final direct = inputs[path];
+    if (direct != null && direct.isNotEmpty) return direct;
+    final slash = path.lastIndexOf('/');
+    if (slash > 0) {
+      final parent = inputs[path.substring(0, slash)];
+      if (parent != null && parent.isNotEmpty) return parent;
+    }
+    return null;
+  }
+
   List<_Kernel> kernelsOf(String dir, Map<String, Uint8List>? inputs) {
     final indexPath = '$dir/index.json';
-    final digest = inputs?[indexPath];
-    final cached = _indexCache[dir];
+    final digest = _lookupDigest(indexPath, inputs);
+    final cached = _indexCache.remove(dir);
     if (cached != null) {
       if (digest != null &&
-          cached.digest != null &&
           digest.isNotEmpty &&
-          _sameDigest(digest, cached.digest!)) {
-        return cached.value;
-      }
-      final stat = File(indexPath).statSync();
-      if (stat.size == cached.size &&
-          stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
-        return cached.value;
+          cached.digest != null &&
+          cached.digest!.isNotEmpty) {
+        if (_sameDigest(digest, cached.digest!)) {
+          _indexCache[dir] = cached;
+          return cached.value;
+        }
+      } else {
+        final stat = File(indexPath).statSync();
+        if (stat.size == cached.size &&
+            stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
+          _indexCache[dir] = _CachedEntry(
+            cached.value,
+            digest ?? cached.digest,
+            cached.size,
+            cached.modifiedMicros,
+          );
+          return cached.value;
+        }
       }
     }
     final file = File(indexPath);
@@ -99,6 +123,9 @@ class _KernelLinkCache {
           (scc['imports'] as List).cast<String>(),
         ),
     ];
+    while (_indexCache.length >= _maxIndexEntries && _indexCache.isNotEmpty) {
+      _indexCache.remove(_indexCache.keys.first);
+    }
     _indexCache[dir] = _CachedEntry(
       kernels,
       digest,
@@ -109,19 +136,29 @@ class _KernelLinkCache {
   }
 
   Set<String> baseKeysOf(String path, Map<String, Uint8List>? inputs) {
-    final digest = inputs?[path];
-    final cached = _baseKeysCache[path];
+    final digest = _lookupDigest(path, inputs);
+    final cached = _baseKeysCache.remove(path);
     if (cached != null) {
       if (digest != null &&
-          cached.digest != null &&
           digest.isNotEmpty &&
-          _sameDigest(digest, cached.digest!)) {
-        return cached.value;
-      }
-      final stat = File(path).statSync();
-      if (stat.size == cached.size &&
-          stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
-        return cached.value;
+          cached.digest != null &&
+          cached.digest!.isNotEmpty) {
+        if (_sameDigest(digest, cached.digest!)) {
+          _baseKeysCache[path] = cached;
+          return cached.value;
+        }
+      } else {
+        final stat = File(path).statSync();
+        if (stat.size == cached.size &&
+            stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
+          _baseKeysCache[path] = _CachedEntry(
+            cached.value,
+            digest ?? cached.digest,
+            cached.size,
+            cached.modifiedMicros,
+          );
+          return cached.value;
+        }
       }
     }
     final file = File(path);
@@ -130,6 +167,10 @@ class _KernelLinkCache {
     for (final line in file.readAsLinesSync()) {
       final trimmed = line.trim();
       if (trimmed.isNotEmpty) keys.add(trimmed);
+    }
+    while (_baseKeysCache.length >= _maxBaseKeysEntries &&
+        _baseKeysCache.isNotEmpty) {
+      _baseKeysCache.remove(_baseKeysCache.keys.first);
     }
     _baseKeysCache[path] = _CachedEntry(
       keys,
@@ -141,22 +182,31 @@ class _KernelLinkCache {
   }
 
   Uint8List dillBytesOf(String path, Map<String, Uint8List>? inputs) {
-    final digest = inputs?[path];
-    final cached = _dillCache[path];
+    final digest = _lookupDigest(path, inputs);
+    final cached = _dillCache.remove(path);
     if (cached != null) {
       if (digest != null &&
-          cached.digest != null &&
           digest.isNotEmpty &&
-          _sameDigest(digest, cached.digest!)) {
-        return cached.value;
-      }
-      final stat = File(path).statSync();
-      if (stat.size == cached.size &&
-          stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
-        return cached.value;
+          cached.digest != null &&
+          cached.digest!.isNotEmpty) {
+        if (_sameDigest(digest, cached.digest!)) {
+          _dillCache[path] = cached;
+          return cached.value;
+        }
+      } else {
+        final stat = File(path).statSync();
+        if (stat.size == cached.size &&
+            stat.modified.microsecondsSinceEpoch == cached.modifiedMicros) {
+          _dillCache[path] = _CachedEntry(
+            cached.value,
+            digest ?? cached.digest,
+            cached.size,
+            cached.modifiedMicros,
+          );
+          return cached.value;
+        }
       }
       _dillBytesTotal -= cached.value.length;
-      _dillCache.remove(path);
     }
     final file = File(path);
     final stat = file.statSync();
@@ -286,21 +336,42 @@ int _linkOne(
     }
   }
 
+  final baseKeys = baseKeysPath != null
+      ? cache.baseKeysOf(baseKeysPath, inputs)
+      : const <String>{};
+
   final order = <_Kernel>[];
   final visited = <_Kernel>{};
+  var missingModule = false;
   void visit(_Kernel kernel) {
-    if (!visited.add(kernel)) return;
+    if (baseKeys.contains(kernel.key) || !visited.add(kernel)) return;
     for (final key in ([...kernel.imports]..sort())) {
+      if (baseKeys.contains(key)) continue;
       final dependency = owner[key];
-      if (dependency != null) visit(dependency);
+      if (dependency != null) {
+        visit(dependency);
+      } else if (!key.startsWith('dart:')) {
+        errSink.writeln(
+          'kernel_link: missing module for imported library $key (imported by ${kernel.path})',
+        );
+        missingModule = true;
+      }
     }
     order.add(kernel);
   }
 
   if (entry != null) {
     for (final key in ([...entry.imports]..sort())) {
+      if (baseKeys.contains(key)) continue;
       final dependency = owner[key];
-      if (dependency != null) visit(dependency);
+      if (dependency != null) {
+        visit(dependency);
+      } else if (!key.startsWith('dart:')) {
+        errSink.writeln(
+          'kernel_link: missing module for imported library $key (imported by ${entry.path})',
+        );
+        missingModule = true;
+      }
     }
   } else {
     for (final seedDir in seedModules) {
@@ -324,6 +395,7 @@ int _linkOne(
       }
     }
   }
+  if (missingModule) return 1;
 
   final linked = [if (entry != null) entry, ...order];
   final definedBy = <String, _Kernel>{};
@@ -339,10 +411,6 @@ int _linkOne(
       definedBy[key] = kernel;
     }
   }
-
-  final baseKeys = baseKeysPath != null
-      ? cache.baseKeysOf(baseKeysPath, inputs)
-      : const <String>{};
 
   final emitted = [
     if (entry != null) entry,
@@ -360,8 +428,14 @@ int _linkOne(
   File(output).writeAsBytesSync(outBuilder.takeBytes());
 
   if (writeKeysPath != null) {
-    File(writeKeysPath)
-        .writeAsStringSync(emitted.map((k) => '${k.key}\n').join());
+    final keysOut = StringBuffer();
+    for (final k in emitted) {
+      keysOut.writeln(k.key);
+      for (final def in k.defines) {
+        keysOut.writeln(def);
+      }
+    }
+    File(writeKeysPath).writeAsStringSync(keysOut.toString());
   }
   return 0;
 }

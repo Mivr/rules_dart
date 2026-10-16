@@ -23,6 +23,7 @@ load(
     "kernel_package_config",
     "kernel_packages_consistent",
     "library_source_uri",
+    "modular_executable_kernel",
     "modular_kernel_eligible",
     "multi_root_uri",
     "no_kernel_module",
@@ -352,6 +353,7 @@ def _eligible_test_impl(ctx):
         "the closure has a package at two roots": {"packages_consistent": False},
         "code assets are embedded": {"has_code_assets": True},
         "the test sets its own `defines`": {"has_own_defines": True},
+        "extra_dart_defines contains a comma": {"has_comma_defines": True},
         "dart_compile_flags are set": {"has_compile_flags": True},
         "a source is compiled twice": {"has_duplicate_source": True},
         "the exec and target SDKs differ": {"same_sdk": False},
@@ -398,7 +400,7 @@ def _custom_kernel_module_fixture_impl(ctx):
         dep_kmods = depset(order = "postorder"),
         output = kmod,
         koutline = koutline,
-        defines = ["FLUTTER_WEB=false"],
+        defines = ["FLUTTER_WEB=false", "COMMA_VAL=a,b"],
         exclude_non_sources = True,
         droppable = True,
         target = "flutter",
@@ -503,6 +505,16 @@ def _kernel_module_action_custom_params_test_impl(ctx):
         "--output-outline" in argv,
         "--output-outline passed when koutline is given",
     )
+    asserts.true(
+        env,
+        "-DFLUTTER_WEB=false" in argv,
+        "non-comma define is forwarded to kernel_module",
+    )
+    asserts.false(
+        env,
+        "-DCOMMA_VAL=a,b" in argv,
+        "comma-containing define is filtered from kernel_module action args",
+    )
 
     input_basenames = [f.basename for f in kernel_action.inputs.to_list()]
     asserts.true(
@@ -604,6 +616,135 @@ def _non_modular_kernel_binary_test_impl(ctx):
 
 _non_modular_kernel_binary_test = analysistest.make(_non_modular_kernel_binary_test_impl)
 
+_comma_defines_fallback_binary_test = analysistest.make(
+    _non_modular_kernel_binary_test_impl,
+    config_settings = {
+        str(Label("//dart:extra_dart_defines")): ["COMMA_FLAG=a,b"],
+    },
+)
+
+def _unseeded_base_kmods_fixture_impl(ctx):
+    dartaotruntime = ctx.actions.declare_file(ctx.label.name + "_dartaotruntime")
+    kernel_worker = ctx.actions.declare_file(ctx.label.name + "_kernel_worker.snapshot")
+    platform_dill = ctx.actions.declare_file(ctx.label.name + "_vm_platform_strong.dill")
+    libraries_json = ctx.actions.declare_file(ctx.label.name + "_libraries.json")
+    src_file = ctx.actions.declare_file(ctx.label.name + "_main_test.dart")
+    base_dill = ctx.actions.declare_file(ctx.label.name + ".base.dill")
+    base_keys = ctx.actions.declare_file(ctx.label.name + ".base.keys")
+    for f in [dartaotruntime, kernel_worker, platform_dill, libraries_json, src_file, base_dill, base_keys]:
+        ctx.actions.write(output = f, content = "")
+
+    base_kmod = ctx.actions.declare_directory(ctx.label.name + "_matcher.kmod")
+    crypto_kmod = ctx.actions.declare_directory(ctx.label.name + "_crypto.kmod")
+    shelf_kmod = ctx.actions.declare_directory(ctx.label.name + "_shelf.kmod")
+    base_koutline = ctx.actions.declare_directory(ctx.label.name + "_matcher.koutline")
+    crypto_koutline = ctx.actions.declare_directory(ctx.label.name + "_crypto.koutline")
+    shelf_koutline = ctx.actions.declare_directory(ctx.label.name + "_shelf.koutline")
+    for d in [base_kmod, crypto_kmod, shelf_kmod, base_koutline, crypto_koutline, shelf_koutline]:
+        ctx.actions.run_shell(outputs = [d], command = "mkdir -p " + d.path)
+
+    all_kmods = depset([base_kmod, crypto_kmod, shelf_kmod], order = "postorder")
+    all_koutlines = depset([base_koutline, crypto_koutline, shelf_koutline], order = "postorder")
+
+    # dep_a did not use crypto (crypto_kmod and shelf_kmod both in unseeded_base_kmods)
+    dep_a = DartKernelInfo(
+        kmod = base_kmod,
+        koutline = base_koutline,
+        transitive_kmods = all_kmods,
+        transitive_koutlines = all_koutlines,
+        modular = True,
+        closure_excluded = depset(),
+        cross_pkg_srcs = depset(),
+        owned = depset(),
+        edges = depset(),
+        base_dill = base_dill,
+        base_keys = base_keys,
+        base_kmods = depset([base_kmod]),
+        unseeded_base_kmods = depset([crypto_kmod, shelf_kmod]),
+    )
+
+    # dep_b used crypto (so crypto_kmod was removed from dep_b.unseeded_base_kmods)
+    dep_b = DartKernelInfo(
+        kmod = crypto_kmod,
+        koutline = crypto_koutline,
+        transitive_kmods = all_kmods,
+        transitive_koutlines = all_koutlines,
+        modular = True,
+        closure_excluded = depset(),
+        cross_pkg_srcs = depset(),
+        owned = depset(),
+        edges = depset(),
+        base_dill = base_dill,
+        base_keys = base_keys,
+        base_kmods = depset([base_kmod]),
+        unseeded_base_kmods = depset([shelf_kmod]),
+    )
+
+    tools = struct(
+        dartaotruntime = dartaotruntime,
+        kernel_worker = kernel_worker,
+        platform_dill = platform_dill,
+        libraries_json = libraries_json,
+        version = "3.11.0",
+    )
+    out_dill = ctx.actions.declare_file(ctx.label.name + ".dill")
+    modular_executable_kernel(
+        ctx = ctx,
+        tools = tools,
+        sources = [struct(uri = "org-dartlang-bazel:///pkg/test/main_test.dart", file = src_file)],
+        packages = [_pkg("pkg", "pkg", "3.9")],
+        dep_kernels = [dep_a, dep_b],
+        output = out_dill,
+        use_base_dill = True,
+    )
+    return [DefaultInfo(files = depset([out_dill]))]
+
+_unseeded_base_kmods_fixture = rule(
+    implementation = _unseeded_base_kmods_fixture_impl,
+    attrs = {
+        "_extra_dart_defines": attr.label(
+            default = Label("//dart:extra_dart_defines"),
+        ),
+        "_kernel_module": attr.label(
+            default = Label("//dart:kernel_module"),
+            executable = True,
+            cfg = "exec",
+        ),
+        "_kernel_link": attr.label(
+            default = Label("//dart:kernel_link"),
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+
+def _unseeded_base_kmods_intersection_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    actions = analysistest.target_actions(env)
+    link_actions = [a for a in actions if a.mnemonic == "DartKernelLink"]
+    asserts.equals(env, 1, len(link_actions), "registers one DartKernelLink action")
+    link_input_basenames = [f.basename for f in link_actions[0].inputs.to_list()]
+    asserts.true(
+        env,
+        any([b.endswith("_crypto.kmod") for b in link_input_basenames]),
+        "crypto.kmod used by second base_dill helper is retained in DartKernelLink inputs",
+    )
+    asserts.false(
+        env,
+        any([b.endswith("_shelf.kmod") for b in link_input_basenames]),
+        "shelf.kmod unseeded in all dependencies is pruned from DartKernelLink inputs",
+    )
+    asserts.false(
+        env,
+        any([b.endswith("_matcher.kmod") for b in link_input_basenames]),
+        "matcher.kmod in base_kmods is pruned from DartKernelLink inputs",
+    )
+    return analysistest.end(env)
+
+_unseeded_base_kmods_intersection_test = analysistest.make(
+    _unseeded_base_kmods_intersection_test_impl,
+)
+
 _root_path_test = unittest.make(_root_path_test_impl)
 _multi_root_uri_test = unittest.make(_multi_root_uri_test_impl)
 _multi_root_uri_custom_scheme_test = unittest.make(_multi_root_uri_custom_scheme_test_impl)
@@ -661,6 +802,20 @@ def kernel_test_suite(name):
         target_under_test = ":" + name + "_non_modular_binary_fixture",
         size = "small",
     )
+    _comma_defines_fallback_binary_test(
+        name = name + "_comma_defines_fallback_binary_test",
+        target_under_test = ":" + name + "_modular_binary_fixture",
+        size = "small",
+    )
+    _unseeded_base_kmods_fixture(
+        name = name + "_unseeded_base_kmods_fixture",
+        tags = ["manual"],
+    )
+    _unseeded_base_kmods_intersection_test(
+        name = name + "_unseeded_base_kmods_intersection_test",
+        target_under_test = ":" + name + "_unseeded_base_kmods_fixture",
+        size = "small",
+    )
     small_unittest_suite(
         name + "_unit",
         _root_path_test,
@@ -683,5 +838,7 @@ def kernel_test_suite(name):
             ":" + name + "_custom_module_action_test",
             ":" + name + "_modular_binary_test",
             ":" + name + "_non_modular_binary_test",
+            ":" + name + "_comma_defines_fallback_binary_test",
+            ":" + name + "_unseeded_base_kmods_intersection_test",
         ],
     )

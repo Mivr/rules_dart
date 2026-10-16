@@ -320,7 +320,8 @@ def modular_kernel_eligible(
         has_own_defines,
         has_compile_flags,
         has_duplicate_source,
-        same_sdk):
+        same_sdk,
+        has_comma_defines = False):
     """Whether one executable compiles modularly, given every fact that decides it.
 
     Each `False` is a reason the executable falls back to whole-program compilation,
@@ -354,6 +355,7 @@ def modular_kernel_eligible(
         packages_consistent and
         not has_code_assets and
         not has_own_defines and
+        not has_comma_defines and
         not has_compile_flags and
         not has_duplicate_source and
         same_sdk
@@ -557,7 +559,7 @@ def kernel_module_action(
     args.add("--multi-root", ctx.bin_dir.path)
     args.add("--multi-root", ".")
     args.add("--multi-root-scheme", scheme)
-    args.add_all(defines, format_each = "-D%s")
+    args.add_all([d for d in defines if "," not in d], format_each = "-D%s")
     args.add_all(extra_frontend_flags)
 
     # The VM target does not support `--summary-only`: it prints an error and
@@ -802,6 +804,7 @@ def modular_executable_tools(
     edges = depset(transitive = [k.edges for k in kernels or []]).to_list()
     duplicate = duplicated_source([f.short_path for f in own_files], owned, edges)
 
+    has_comma_defines = any(["," in d for d in global_dart_defines(ctx)])
     eligible = modular_kernel_eligible(
         enabled = enabled,
         kernel_mode = kernel_mode,
@@ -812,6 +815,7 @@ def modular_executable_tools(
         has_compile_flags = len(compile_flags) > 0,
         has_duplicate_source = duplicate != None,
         same_sdk = tools.version == target_sdk.version,
+        has_comma_defines = has_comma_defines,
     )
     return tools if eligible else None
 
@@ -892,17 +896,28 @@ def modular_executable_kernel(
     base_dill = None
     base_keys = None
     base_kmods = depset()
-    unseeded_base_kmods = depset()
+    unseeded_candidates = None
     if use_base_dill:
         for k in dep_kernels:
             kd = getattr(k, "base_dill", None)
             kk = getattr(k, "base_keys", None)
             if kd != None and kk != None:
-                base_dill = kd
-                base_keys = kk
-                base_kmods = getattr(k, "base_kmods", depset())
-                unseeded_base_kmods = getattr(k, "unseeded_base_kmods", depset())
-                break
+                if base_dill == None:
+                    base_dill = kd
+                    base_keys = kk
+                    base_kmods = getattr(k, "base_kmods", depset())
+                if kd == base_dill:
+                    k_unseeded = getattr(k, "unseeded_base_kmods", depset()).to_list()
+                    if unseeded_candidates == None:
+                        unseeded_candidates = {f.path: f for f in k_unseeded}
+                    else:
+                        keep = {f.path: True for f in k_unseeded}
+                        unseeded_candidates = {
+                            p: f
+                            for p, f in unseeded_candidates.items()
+                            if p in keep
+                        }
+    unseeded_base_kmods = depset(unseeded_candidates.values() if unseeded_candidates != None else [])
     link_dep_closure = dep_closure
     if base_dill != None and base_keys != None:
         user_kmod_paths = {
@@ -1031,17 +1046,27 @@ def library_kernel_info(
     base_dill = None
     base_keys = None
     base_kmods = depset()
-    unseeded_base_kmods = depset()
+    unseeded_candidates = None
     for k in dep_kernels:
         kd = getattr(k, "base_dill", None)
         kk = getattr(k, "base_keys", None)
         if kd != None and kk != None:
-            base_dill = kd
-            base_keys = kk
-            base_kmods = getattr(k, "base_kmods", depset())
-            unseeded_base_kmods = getattr(k, "unseeded_base_kmods", depset())
-            break
-    if base_dill != None:
+            if base_dill == None:
+                base_dill = kd
+                base_keys = kk
+                base_kmods = getattr(k, "base_kmods", depset())
+            if kd == base_dill:
+                k_unseeded = getattr(k, "unseeded_base_kmods", depset()).to_list()
+                if unseeded_candidates == None:
+                    unseeded_candidates = {f.path: f for f in k_unseeded}
+                else:
+                    keep = {f.path: True for f in k_unseeded}
+                    unseeded_candidates = {
+                        p: f
+                        for p, f in unseeded_candidates.items()
+                        if p in keep
+                    }
+    if base_dill != None and unseeded_candidates != None:
         non_base_kmod_paths = {
             f.path: True
             for k in dep_kernels
@@ -1049,11 +1074,12 @@ def library_kernel_info(
             for f in k.transitive_kmods.to_list()
         }
         if non_base_kmod_paths:
-            unseeded_base_kmods = depset([
-                f
-                for f in unseeded_base_kmods.to_list()
-                if f.path not in non_base_kmod_paths
-            ])
+            unseeded_candidates = {
+                p: f
+                for p, f in unseeded_candidates.items()
+                if p not in non_base_kmod_paths
+            }
+    unseeded_base_kmods = depset(unseeded_candidates.values() if unseeded_candidates != None else [])
     if not own_srcs:
         # A façade: nothing to compile, but its dependencies' modules still link.
         return DartKernelInfo(
@@ -1101,11 +1127,12 @@ def library_kernel_info(
     if package_name == "test" and target == "vm" and hasattr(ctx.executable, "_kernel_link"):
         base_dill = ctx.actions.declare_file(ctx.label.name + ".base.dill")
         base_keys = ctx.actions.declare_file(ctx.label.name + ".base.keys")
-        seed_kmods = [kmod] + [
+        seeded_dep_kmods = [
             k
             for k in dep_closure.to_list()
             if _kmod_pkg_name(k) in _TEST_API_BASE_PACKAGES
         ]
+        seed_kmods = [kmod] + seeded_dep_kmods
         unseeded_kmods = [
             k
             for k in dep_closure.to_list()
@@ -1119,7 +1146,7 @@ def library_kernel_info(
             seed_modules = seed_kmods,
             write_keys = base_keys,
         )
-        base_kmods = depset(seed_kmods)
+        base_kmods = depset(seeded_dep_kmods)
         unseeded_base_kmods = depset(unseeded_kmods)
     return DartKernelInfo(
         kmod = kmod,

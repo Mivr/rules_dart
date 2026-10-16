@@ -918,8 +918,10 @@ class _DillOutlineStripper {
     _procOffset();
     final flags = _readUInt30();
     _out.writeUInt30(flags);
-    final isConst = (flags & 2) != 0; // Field.FlagConst = 1 << 1
-    final keepInit = isConst || isMixin;
+    final isFinal = (flags & 1) != 0;
+    final isConst = (flags & 2) != 0;
+    final isStatic = (flags & 4) != 0;
+    final keepInit = isConst || isMixin || (isFinal && !isStatic);
     _procName();
     final scopeSize = _readUInt30();
     _out.writeUInt30(keepInit ? scopeSize : 0);
