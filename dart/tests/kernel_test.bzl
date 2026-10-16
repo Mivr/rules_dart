@@ -8,6 +8,7 @@ use them are exercised by the rules' own test targets.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
+load("//dart:defs.bzl", "dart_binary")
 load("//dart:providers.bzl", "DartKernelInfo")
 load(
     "//dart:utils.bzl",
@@ -541,6 +542,64 @@ _kernel_module_action_custom_params_test = analysistest.make(
     _kernel_module_action_custom_params_test_impl,
 )
 
+def _dummy_dart_source_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".dart")
+    ctx.actions.write(output = out, content = "void main() {}\n")
+    return [DefaultInfo(files = depset([out]))]
+
+_dummy_dart_source = rule(
+    implementation = _dummy_dart_source_impl,
+)
+
+def _modular_kernel_binary_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    actions = analysistest.target_actions(env)
+
+    kernel_actions = [a for a in actions if a.mnemonic == "DartKernel"]
+    asserts.equals(env, 1, len(kernel_actions), "modular kernel binary registers one DartKernel entry action")
+    kernel_out_basenames = [f.basename for f in kernel_actions[0].outputs.to_list()]
+    asserts.true(
+        env,
+        target.label.name + ".entry.kmod" in kernel_out_basenames,
+        "DartKernel action produces <name>.entry.kmod",
+    )
+
+    link_actions = [a for a in actions if a.mnemonic == "DartKernelLink"]
+    asserts.equals(env, 1, len(link_actions), "modular kernel binary registers one DartKernelLink action")
+    link_out_basenames = [f.basename for f in link_actions[0].outputs.to_list()]
+    asserts.true(
+        env,
+        target.label.name + ".dill" in link_out_basenames,
+        "DartKernelLink action produces <name>.dill",
+    )
+
+    compile_actions = [a for a in actions if a.mnemonic == "DartCompile"]
+    asserts.equals(env, 0, len(compile_actions), "modular kernel binary registers no whole-program DartCompile action")
+    return analysistest.end(env)
+
+_modular_kernel_binary_test = analysistest.make(_modular_kernel_binary_test_impl)
+
+def _non_modular_kernel_binary_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    actions = analysistest.target_actions(env)
+
+    link_actions = [a for a in actions if a.mnemonic == "DartKernelLink"]
+    asserts.equals(env, 0, len(link_actions), "modular_kernel = False binary registers no DartKernelLink action")
+    kernel_actions = [a for a in actions if a.mnemonic == "DartKernel"]
+    asserts.equals(env, 1, len(kernel_actions), "modular_kernel = False binary runs one whole-program DartKernel action")
+    kernel_out_basenames = [f.basename for f in kernel_actions[0].outputs.to_list()]
+    asserts.equals(
+        env,
+        [target.label.name + ".dill"],
+        kernel_out_basenames,
+        "whole-program DartKernel produces <name>.dill directly without .entry.kmod",
+    )
+    return analysistest.end(env)
+
+_non_modular_kernel_binary_test = analysistest.make(_non_modular_kernel_binary_test_impl)
+
 _root_path_test = unittest.make(_root_path_test_impl)
 _multi_root_uri_test = unittest.make(_multi_root_uri_test_impl)
 _multi_root_uri_custom_scheme_test = unittest.make(_multi_root_uri_custom_scheme_test_impl)
@@ -569,6 +628,35 @@ def kernel_test_suite(name):
         target_under_test = ":" + name + "_custom_module_fixture",
         size = "small",
     )
+    _dummy_dart_source(
+        name = name + "_binary_main",
+        tags = ["manual"],
+    )
+    dart_binary(
+        name = name + "_modular_binary_fixture",
+        compile_mode = "kernel",
+        main = ":" + name + "_binary_main",
+        deps = ["//dart/tests/shape_fixture:shape_fixture_lib"],
+        tags = ["manual"],
+    )
+    _modular_kernel_binary_test(
+        name = name + "_modular_binary_test",
+        target_under_test = ":" + name + "_modular_binary_fixture",
+        size = "small",
+    )
+    dart_binary(
+        name = name + "_non_modular_binary_fixture",
+        compile_mode = "kernel",
+        modular_kernel = False,
+        main = ":" + name + "_binary_main",
+        deps = ["//dart/tests/shape_fixture:shape_fixture_lib"],
+        tags = ["manual"],
+    )
+    _non_modular_kernel_binary_test(
+        name = name + "_non_modular_binary_test",
+        target_under_test = ":" + name + "_non_modular_binary_fixture",
+        size = "small",
+    )
     small_unittest_suite(
         name + "_unit",
         _root_path_test,
@@ -589,5 +677,7 @@ def kernel_test_suite(name):
         tests = [
             ":" + name + "_unit",
             ":" + name + "_custom_module_action_test",
+            ":" + name + "_modular_binary_test",
+            ":" + name + "_non_modular_binary_test",
         ],
     )

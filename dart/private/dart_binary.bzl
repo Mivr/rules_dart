@@ -17,6 +17,15 @@ load(
     "target_dart_abi",
 )
 load("//dart/private:dart_compile.bzl", "dart_compile_action", "recorded_uses_kind")
+load(
+    "//dart/private:dart_kernel.bzl",
+    "BINARY_MODULAR_KERNEL_ATTRS",
+    "DartKernelInfo",
+    "MODULAR_KERNEL_TOOLCHAINS",
+    "entry_sources",
+    "modular_executable_kernel",
+    "modular_executable_tools",
+)
 load("//dart/private:executable_package.bzl", "EXECUTABLE_PACKAGE_ATTRS", "executable_package")
 load("//dart/private:source_set.bzl", "executable_inputs")
 
@@ -53,37 +62,14 @@ def _dart_binary_impl(ctx):
     toolchain = ctx.toolchains["//dart:toolchain_type"]
     dart_sdk_info = toolchain.dart_sdk_info
 
-    own = executable_package(ctx, [ctx.file.main] + ctx.files.srcs)
+    own_files = [ctx.file.main] + ctx.files.srcs
+    own = executable_package(ctx, own_files)
     packages = own.packages
 
     if ctx.attr.code_assets_from_deps:
         hook_err = check_unreplaced_hooks(ctx.label, packages)
         if hook_err != None:
             fail(hook_err)
-
-    # Nothing is copied: a package split between the source tree and `bazel-out`
-    # compiles in place, through the multi-root file system (`executable_inputs`).
-    # The one flatten per rule: the package lookup inspects per-file paths.
-    inputs = executable_inputs(
-        packages,
-        collect_transitive_srcs(ctx.attr.deps).to_list(),
-        ctx.file.main,
-        ctx.files.srcs,
-        own.record,
-    )
-    packages = inputs.packages
-    main_input = inputs.main_input
-    main_arg = inputs.main_arg
-    all_srcs = inputs.srcs
-
-    # Root resolution must see the rule's own inputs too: a package whose
-    # metadata comes from a srcs-less façade library resolves only via the
-    # files this rule supplies itself.
-    package_config = ctx.actions.declare_file(ctx.label.name + ".package_config.json")
-    ctx.actions.write(
-        output = package_config,
-        content = generate_stable_package_config(packages, all_srcs, inputs.roots),
-    )
 
     # Determine output filename (Windows gets the `.exe` extension — see
     # `binary_output_basename`).
@@ -95,18 +81,6 @@ def _dart_binary_impl(ctx):
         binary_output_basename(ctx.label.name, compile_mode, is_windows),
     )
 
-    # By default compile the source main directly. With native code assets,
-    # first run gen_kernel with the asset mapping embedded (its `relative`
-    # paths resolve against the final executable at runtime), then compile the
-    # resulting kernel — `dart compile` accepts a `.dill` input and the
-    # metadata flows through into the snapshot.
-    compile_main = main_input
-    compile_main_arg = main_arg
-    compile_srcs = all_srcs
-    compile_package_config = package_config
-    compile_defines = merge_dart_defines(ctx)
-    code_asset_libs = []
-
     # Assets reach a binary two ways: propagated from any package in `deps`
     # that owns one (the upstream semantics — depending on a package gets you
     # its assets), or named outright. The explicit attr stays valid for
@@ -116,39 +90,6 @@ def _dart_binary_impl(ctx):
         collect_transitive_code_assets(ctx.attr.deps) if ctx.attr.code_assets_from_deps else [],
         [dep[DartCodeAssetInfo] for dep in ctx.attr.code_assets],
     )
-
-    if resolved_assets:
-        abi = target_dart_abi(ctx)
-        entries, code_asset_libs = code_asset_entries(
-            ctx.label,
-            resolved_assets,
-            output.dirname,
-        )
-        native_assets_yaml = ctx.actions.declare_file(ctx.label.name + ".native_assets.yaml")
-        ctx.actions.write(
-            output = native_assets_yaml,
-            content = generate_native_assets_yaml(abi, entries),
-        )
-        dill = ctx.actions.declare_file(ctx.label.name + ".na.dill")
-        gen_kernel_native_assets_action(
-            ctx = ctx,
-            dart_sdk_info = dart_sdk_info,
-            main = main_input,
-            transitive_srcs = depset(all_srcs),
-            package_config = package_config,
-            native_assets_yaml = native_assets_yaml,
-            output_dill = dill,
-            main_path = main_arg,
-            defines = compile_defines,
-        )
-        compile_main = dill
-        compile_main_arg = None
-        compile_srcs = []
-        compile_package_config = None
-
-        # gen_kernel ran the front end, so the defines are already resolved
-        # into `dill`. Repeating them here would be a silent no-op.
-        compile_defines = []
 
     # The compiler records the uses of `@RecordUse` definitions only when it
     # tree-shakes, so the other modes get the file it writes when there is
@@ -165,23 +106,111 @@ def _dart_binary_impl(ctx):
             ctx.actions.write(output = recorded_uses, content = "{}")
         recorded_uses_info = [DartRecordedUsesInfo(file = recorded_uses, kind = kind)]
 
-    # Run dart compile
-    dart_compile_action(
-        ctx = ctx,
-        dart_sdk_info = dart_sdk_info,
-        main = compile_main,
-        main_path = compile_main_arg,
-        srcs = compile_srcs,
-        package_config = compile_package_config,
-        output = output,
-        compile_mode = compile_mode,
-        target_os = dart_sdk_info.target_os,
-        target_arch = dart_sdk_info.target_arch,
-        extra_flags = ctx.attr.dart_compile_flags,
-        defines = compile_defines,
-        recorded_uses = compile_recorded_uses,
-        jit_tool = ctx.file._jit_tool,
+    code_asset_libs = []
+    kernel_tools = modular_executable_tools(
+        ctx,
+        own_files,
+        own.record,
+        kernel_mode = (compile_mode == "kernel" and ctx.attr.modular_kernel),
+        resolved_assets = resolved_assets,
+        own_defines = ctx.attr.defines,
+        compile_flags = ctx.attr.dart_compile_flags,
     )
+    if kernel_tools != None:
+        modular_executable_kernel(
+            ctx,
+            kernel_tools,
+            entry_sources(own_files),
+            packages,
+            [dep[DartKernelInfo] for dep in ctx.attr.deps],
+            output,
+        )
+    else:
+        # Nothing is copied: a package split between the source tree and `bazel-out`
+        # compiles in place, through the multi-root file system (`executable_inputs`).
+        # The one flatten per rule: the package lookup inspects per-file paths.
+        inputs = executable_inputs(
+            packages,
+            collect_transitive_srcs(ctx.attr.deps).to_list(),
+            ctx.file.main,
+            ctx.files.srcs,
+            own.record,
+        )
+        packages = inputs.packages
+        main_input = inputs.main_input
+        main_arg = inputs.main_arg
+        all_srcs = inputs.srcs
+
+        # Root resolution must see the rule's own inputs too: a package whose
+        # metadata comes from a srcs-less façade library resolves only via the
+        # files this rule supplies itself.
+        package_config = ctx.actions.declare_file(ctx.label.name + ".package_config.json")
+        ctx.actions.write(
+            output = package_config,
+            content = generate_stable_package_config(packages, all_srcs, inputs.roots),
+        )
+
+        # By default compile the source main directly. With native code assets,
+        # first run gen_kernel with the asset mapping embedded (its `relative`
+        # paths resolve against the final executable at runtime), then compile the
+        # resulting kernel — `dart compile` accepts a `.dill` input and the
+        # metadata flows through into the snapshot.
+        compile_main = main_input
+        compile_main_arg = main_arg
+        compile_srcs = all_srcs
+        compile_package_config = package_config
+        compile_defines = merge_dart_defines(ctx)
+
+        if resolved_assets:
+            abi = target_dart_abi(ctx)
+            entries, code_asset_libs = code_asset_entries(
+                ctx.label,
+                resolved_assets,
+                output.dirname,
+            )
+            native_assets_yaml = ctx.actions.declare_file(ctx.label.name + ".native_assets.yaml")
+            ctx.actions.write(
+                output = native_assets_yaml,
+                content = generate_native_assets_yaml(abi, entries),
+            )
+            dill = ctx.actions.declare_file(ctx.label.name + ".na.dill")
+            gen_kernel_native_assets_action(
+                ctx = ctx,
+                dart_sdk_info = dart_sdk_info,
+                main = main_input,
+                transitive_srcs = depset(all_srcs),
+                package_config = package_config,
+                native_assets_yaml = native_assets_yaml,
+                output_dill = dill,
+                main_path = main_arg,
+                defines = compile_defines,
+            )
+            compile_main = dill
+            compile_main_arg = None
+            compile_srcs = []
+            compile_package_config = None
+
+            # gen_kernel ran the front end, so the defines are already resolved
+            # into `dill`. Repeating them here would be a silent no-op.
+            compile_defines = []
+
+        # Run dart compile
+        dart_compile_action(
+            ctx = ctx,
+            dart_sdk_info = dart_sdk_info,
+            main = compile_main,
+            main_path = compile_main_arg,
+            srcs = compile_srcs,
+            package_config = compile_package_config,
+            output = output,
+            compile_mode = compile_mode,
+            target_os = dart_sdk_info.target_os,
+            target_arch = dart_sdk_info.target_arch,
+            extra_flags = ctx.attr.dart_compile_flags,
+            defines = compile_defines,
+            recorded_uses = compile_recorded_uses,
+            jit_tool = ctx.file._jit_tool,
+        )
 
     # Resources ride the runfiles, not the compile. A dep's `lib/**` non-Dart
     # files are part of the package at run time under pub, and the compiled
@@ -292,8 +321,8 @@ In the `exe` and `aot-snapshot` modes the compiler records them as it tree-shake
 `kernel` and `jit-snapshot` modes do not tree-shake, so nothing is recorded and the file is \
 the empty JSON object `{}` (`kind = "empty"`).""",
         ),
-    }, **dict(DART_ABI_CONSTRAINT_ATTRS, **dict(EXTRA_DART_DEFINES_ATTR, **EXECUTABLE_PACKAGE_ATTRS))),
+    }, **dict(DART_ABI_CONSTRAINT_ATTRS, **dict(EXTRA_DART_DEFINES_ATTR, **dict(EXECUTABLE_PACKAGE_ATTRS, **BINARY_MODULAR_KERNEL_ATTRS)))),
     executable = True,
-    toolchains = ["//dart:toolchain_type"],
+    toolchains = ["//dart:toolchain_type"] + MODULAR_KERNEL_TOOLCHAINS,
     doc = "Compiles a Dart application using `dart compile`.",
 )

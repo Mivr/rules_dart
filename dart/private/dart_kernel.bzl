@@ -52,9 +52,20 @@ EXEC_TOOLS_TOOLCHAIN = Label("//dart:exec_tools_toolchain_type")
 
 DartKernelInfo = _DartKernelInfo
 
+def _kernel_module_for_mode(name, compile_mode, modular_kernel):
+    if compile_mode == "kernel" and modular_kernel and name not in ("kernel_module", "kernel_link"):
+        return Label("//dart/private/tools:kernel_module")
+    return None
+
+def _kernel_link_for_mode(name, compile_mode, modular_kernel):
+    if compile_mode == "kernel" and modular_kernel and name not in ("kernel_module", "kernel_link"):
+        return Label("//dart/private/tools:kernel_link")
+    return None
+
 # The build setting and the module compiler. `dart_library` takes these (its
-# module) and `dart_test` takes these plus the link tool (its entry module).
-# `dart_binary` takes none, so a tool it depends on can never depend back on it.
+# module), `dart_test` takes `MODULAR_KERNEL_ATTRS`, and `dart_binary` takes
+# `BINARY_MODULAR_KERNEL_ATTRS` (which resolves the tools only for `kernel` mode,
+# so an `exe` tool like `kernel_module` or `kernel_link` never depends on itself).
 #
 # `kernel_module` is a `dart_binary` with no pub dependencies, so it reaches no
 # `dart_library` and no cycle is possible.
@@ -79,6 +90,26 @@ KERNEL_MODULE_ATTRS = {
 }
 
 MODULAR_KERNEL_ATTRS = dict(KERNEL_MODULE_ATTRS)
+
+BINARY_MODULAR_KERNEL_ATTRS = {
+    "modular_kernel": attr.bool(
+        default = True,
+        doc = "Whether `compile_mode = \"kernel\"` compiles modularly against dependency `.kmod` outputs when eligible.",
+    ),
+    "_modular_kernel": KERNEL_MODULE_ATTRS["_modular_kernel"],
+    "_kernel_module": attr.label(
+        doc = "The tool that compiles one module with `kernel_worker`, when `compile_mode` is `kernel`.",
+        default = _kernel_module_for_mode,
+        executable = True,
+        cfg = "exec",
+    ),
+    "_kernel_link": attr.label(
+        doc = "The tool that links an executable's kernel from the kernels its entry reaches, when `compile_mode` is `kernel`.",
+        default = _kernel_link_for_mode,
+        executable = True,
+        cfg = "exec",
+    ),
+}
 
 # Optional, so a build that registers no exec tools toolchain keeps compiling
 # whole-program rather than failing. See `kernel_tools_for`.

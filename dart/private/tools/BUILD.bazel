@@ -26,6 +26,7 @@ dart_binary(
     name = "analyze_runner",
     compile_mode = "kernel",
     main = "analyze_runner.dart",
+    modular_kernel = False,
     visibility = ["//dart:__subpackages__"],
 )
 
@@ -36,6 +37,7 @@ dart_binary(
     code_assets_from_deps = False,
     compile_mode = "exe",
     main = "analyzer_summary.dart",
+    modular_kernel = False,
     visibility = ["//dart:__subpackages__"],
     deps = [
         "//third_party/dart_linter:linter",
@@ -48,6 +50,7 @@ dart_binary(
     name = "fix_runner",
     compile_mode = "kernel",
     main = "fix_runner.dart",
+    modular_kernel = False,
     visibility = ["//dart:__subpackages__"],
 )
 
@@ -97,6 +100,7 @@ dart_binary(
     name = "copy_tree",
     compile_mode = "kernel",
     main = "copy_tree.dart",
+    modular_kernel = False,
     visibility = ["//dart:__subpackages__"],
 )
 
@@ -112,6 +116,7 @@ dart_binary(
     name = "format_runner",
     compile_mode = "kernel",
     main = "format_runner.dart",
+    modular_kernel = False,
     visibility = ["//dart:__subpackages__"],
 )
 
@@ -127,6 +132,7 @@ dart_binary(
     name = "link_hook_runner",
     compile_mode = "kernel",
     main = "link_hook_runner.dart",
+    modular_kernel = False,
     # Public: rules calling `dart_link_hook_actions` declare it as an attribute.
     visibility = ["//visibility:public"],
     deps = [
@@ -142,6 +148,7 @@ dart_binary(
     name = "kernel_link",
     compile_mode = "kernel",
     main = "kernel_link.dart",
+    modular_kernel = False,
     visibility = ["//visibility:public"],
 )
 
@@ -153,6 +160,7 @@ dart_binary(
     srcs = ["dill_outline.dart"],
     compile_mode = "kernel",
     main = "kernel_module.dart",
+    modular_kernel = False,
     visibility = ["//visibility:public"],
 )
 
