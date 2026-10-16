@@ -98,11 +98,15 @@ Future<void> _runPersistentWorker() async {
           summaryCache,
         );
       }
+      final requestInputPaths = <String>{
+        for (final key in request.inputs.keys) p.normalize(p.absolute(key)),
+      };
       exitCode = await _runSingleRequest(
         expandedArgs,
         outSink: output,
         errSink: output,
         resourceProvider: provider,
+        requestInputPaths: requestInputPaths,
       );
     } on Object catch (e, st) {
       output
@@ -127,6 +131,7 @@ Future<int> _runSingleRequest(
   required StringSink outSink,
   required StringSink errSink,
   required fs.ResourceProvider resourceProvider,
+  Set<String>? requestInputPaths,
 }) async {
   _ensureLintRulesRegistered();
   if (args.isEmpty) {
@@ -151,6 +156,7 @@ Future<int> _runSingleRequest(
         outSink: outSink,
         errSink: errSink,
         resourceProvider: resourceProvider,
+        requestInputPaths: requestInputPaths,
       ),
       _ => _usageError(errSink, 'unknown mode `${args.first}`'),
     };
@@ -245,10 +251,15 @@ Future<int> _analyze(
   required StringSink outSink,
   required StringSink errSink,
   required fs.ResourceProvider resourceProvider,
+  Set<String>? requestInputPaths,
 }) async {
   final project = p.normalize(p.absolute(args.single('project')));
   final stamp = args.single('stamp');
   final fatalInfos = args.flag('fatal-infos');
+  final allowedSrcPaths = _pruneOrphanedStagedFiles(
+    project,
+    requestInputPaths: requestInputPaths,
+  );
   final collection = AnalysisContextCollectionImpl(
     resourceProvider: resourceProvider,
     includedPaths: [project],
@@ -263,7 +274,12 @@ Future<int> _analyze(
   final driver = context.driver;
 
   final findings = <_Finding>[];
-  for (final path in _analyzedPaths(project, context)) {
+  for (final path in _analyzedPaths(
+    project,
+    context,
+    allowedSrcPaths: allowedSrcPaths,
+    requestInputPaths: requestInputPaths,
+  )) {
     final options = context.getAnalysisOptionsForFile(
       PhysicalResourceProvider.INSTANCE.getFile(path),
     );
@@ -311,10 +327,60 @@ Future<int> _analyze(
   return 0;
 }
 
+/// Removes any orphaned symlinks or unlisted files under `<project>/src/` left
+/// behind in the shared execroot by previous incremental builds, and returns
+/// the set of normalized absolute paths allowed under `<project>/src/` (or
+/// `null` when no manifest is present).
+Set<String>? _pruneOrphanedStagedFiles(
+  String project, {
+  Set<String>? requestInputPaths,
+}) {
+  final srcDir = Directory(p.join(project, 'src'));
+  if (!srcDir.existsSync()) return null;
+
+  final manifestFile = File(p.join(project, '.dart_tool', 'src_manifest.txt'));
+  Set<String>? allowedPaths;
+  if (manifestFile.existsSync()) {
+    allowedPaths = <String>{
+      for (final line in manifestFile.readAsLinesSync())
+        if (line.isNotEmpty) p.normalize(p.join(srcDir.path, line)),
+    };
+  }
+
+  for (final entity in srcDir.listSync(recursive: true, followLinks: false)) {
+    if (entity is Directory) continue;
+    final normPath = p.normalize(entity.absolute.path);
+    if (allowedPaths != null) {
+      if (!allowedPaths.contains(normPath)) {
+        try {
+          entity.deleteSync();
+        } on FileSystemException {
+          // Ignore if read-only or already removed.
+        }
+      }
+    } else if (entity is Link) {
+      if (requestInputPaths == null || !requestInputPaths.contains(normPath)) {
+        try {
+          entity.deleteSync();
+        } on FileSystemException {
+          // Ignore if read-only or already removed.
+        }
+      }
+    }
+  }
+  return allowedPaths;
+}
+
 /// Every Dart file and options file under the project that the analyzer
 /// analyzes, sorted. The staged tree's excludes apply, as they do to
 /// `dart analyze`.
-List<String> _analyzedPaths(String project, AnalysisContext context) {
+List<String> _analyzedPaths(
+  String project,
+  AnalysisContext context, {
+  Set<String>? allowedSrcPaths,
+  Set<String>? requestInputPaths,
+}) {
+  final srcDir = p.normalize(p.join(project, 'src'));
   final paths = <String>[];
   for (final entity in Directory(project).listSync(recursive: true)) {
     // Follows links, so a staged file that is a symlink is still a file.
@@ -323,6 +389,15 @@ List<String> _analyzedPaths(String project, AnalysisContext context) {
     if (p.split(path).contains('.dart_tool')) continue;
     final name = p.basename(path);
     if (!name.endsWith('.dart') && name != _optionsBasename) continue;
+    if (p.isWithin(srcDir, path)) {
+      if (allowedSrcPaths != null) {
+        if (!allowedSrcPaths.contains(path)) continue;
+      } else if (FileSystemEntity.isLinkSync(path)) {
+        if (requestInputPaths == null || !requestInputPaths.contains(path)) {
+          continue;
+        }
+      }
+    }
     if (!context.contextRoot.isAnalyzed(path)) continue;
     paths.add(path);
   }
@@ -560,7 +635,7 @@ final class _SummaryByteCache {
   void beginRequest(Map<String, Uint8List> requestInputs) {
     _currentInputDigests.clear();
     for (final entry in requestInputs.entries) {
-      if (entry.key.endsWith('.sum')) {
+      if (entry.key.endsWith('.sum') && entry.value.isNotEmpty) {
         _currentInputDigests[p.normalize(p.absolute(entry.key))] = entry.value;
       }
     }
@@ -569,22 +644,32 @@ final class _SummaryByteCache {
   Uint8List readBytes(fs.File delegate) {
     final path = delegate.path;
     final reqDigest = _currentInputDigests[path];
+    final hasReqDigest = reqDigest != null && reqDigest.isNotEmpty;
     final existing = _entries.remove(path);
 
     if (existing != null) {
-      if (reqDigest != null &&
-          existing.digest != null &&
-          _bytesEqual(reqDigest, existing.digest!)) {
-        // Re-insert as most-recently-used.
-        _entries[path] = existing;
-        return existing.bytes;
-      }
-      // Fallback: check file stat if digest wasn't in WorkRequest.inputs.
-      if (reqDigest == null) {
+      final hasExistingDigest =
+          existing.digest != null && existing.digest!.isNotEmpty;
+      if (hasReqDigest && hasExistingDigest) {
+        if (_bytesEqual(reqDigest, existing.digest!)) {
+          // Re-insert as most-recently-used.
+          _entries[path] = existing;
+          return existing.bytes;
+        }
+        // Explicit digest mismatch: do not fall back to statSync().
+      } else {
+        // Fallback: check file stat if either digest was absent or empty.
         final stat = File(path).statSync();
         if (stat.size == existing.size &&
             stat.modified.microsecondsSinceEpoch == existing.modifiedMicros) {
-          _entries[path] = existing;
+          _entries[path] = hasReqDigest
+              ? _CachedSumEntry(
+                  bytes: existing.bytes,
+                  digest: reqDigest,
+                  size: existing.size,
+                  modifiedMicros: existing.modifiedMicros,
+                )
+              : existing;
           return existing.bytes;
         }
       }
@@ -600,7 +685,7 @@ final class _SummaryByteCache {
     }
     _entries[path] = _CachedSumEntry(
       bytes: bytes,
-      digest: reqDigest,
+      digest: hasReqDigest ? reqDigest : null,
       size: stat.size,
       modifiedMicros: stat.modified.microsecondsSinceEpoch,
     );

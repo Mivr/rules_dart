@@ -545,6 +545,13 @@ def stage_dart_project(
             ctx.actions.symlink(output = link, target_file = f)
             staged_links.append(link)
 
+        src_manifest = ctx.actions.declare_file(name + ".proj/.dart_tool/src_manifest.txt")
+        ctx.actions.write(
+            output = src_manifest,
+            content = "".join([p + "\n" for p in sorted(occupied.keys())]),
+        )
+        staged_links.append(src_manifest)
+
         src_tree = struct(
             path = proj_path + "/src",
             dirname = proj_path,

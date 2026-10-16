@@ -1,4 +1,4 @@
-load("//dart:defs.bzl", "dart_analysis_test", "dart_library", "dart_source_set")
+load("//dart:defs.bzl", "dart_analysis_test", "dart_library", "dart_source_set", "dart_test")
 load(
     "//dart/tests:analyzer_summary_test.bzl",
     "default_mode_test",
@@ -194,4 +194,24 @@ dart_analysis_test(
     name = "generated_summary_analysis_test",
     size = "small",
     targets = [":generated_fixture"],
+)
+
+dart_test(
+    name = "worker_hardening_test",
+    size = "small",
+    args = [
+        "$(rlocationpath //dart/private/tools:format_runner)",
+        "$(rlocationpath //dart/private/tools:analyzer_summary)",
+        "$(rlocationpath //dart/private:analyzer_sdk_summary)",
+    ],
+    data = [
+        "//dart/private:analyzer_sdk_summary",
+        "//dart/private/tools:analyzer_summary",
+        "//dart/private/tools:format_runner",
+    ],
+    main = "worker_hardening_test.dart",
+    deps = [
+        "//dart/runfiles",
+        "@ext_pub_deps//:test",
+    ],
 )

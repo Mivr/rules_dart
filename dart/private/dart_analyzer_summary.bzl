@@ -207,10 +207,11 @@ def _analyzer_sdk_summary_impl(ctx):
     args.add("--sdk", sdk_root_path(dart_sdk_info))
     args.add("--out", summary)
     ctx.actions.run(
-        executable = ctx.executable._tool,
-        arguments = [args],
+        executable = dart_sdk_info.dart,
+        arguments = [ctx.executable._tool.path, args],
         inputs = depset(
-            transitive = [dart_sdk_info.analyze_files],
+            direct = [ctx.executable._tool, dart_sdk_info.dart],
+            transitive = [dart_sdk_info.analyze_files, dart_sdk_info.runtime_files],
         ),
         outputs = [summary],
         mnemonic = "DartAnalyzerSdkSummary",
@@ -360,11 +361,11 @@ def _dart_analyzer_summary_impl(target, ctx):
         args.add("--embedder-yaml", embedder_yaml)
         args.add("--out", embedder_sdk)
         ctx.actions.run(
-            executable = ctx.executable._tool,
-            arguments = [args],
+            executable = dart_sdk_info.dart,
+            arguments = [ctx.executable._tool.path, args],
             inputs = depset(
-                direct = files,
-                transitive = [dart_sdk_info.analyze_files, info.transitive_srcs, info.transitive_resources],
+                direct = [ctx.executable._tool, dart_sdk_info.dart] + files,
+                transitive = [dart_sdk_info.analyze_files, dart_sdk_info.runtime_files, info.transitive_srcs, info.transitive_resources],
             ),
             outputs = [embedder_sdk],
             mnemonic = "DartAnalyzerSdkSummary",
@@ -475,11 +476,11 @@ def _dart_analyzer_summary_impl(target, ctx):
         args.add("--uri", _package_uri(info, f))
     args.add_all(dependencies, before_each = "--summary")
     ctx.actions.run(
-        executable = ctx.executable._tool,
-        arguments = [args],
+        executable = dart_sdk_info.dart,
+        arguments = [ctx.executable._tool.path, args],
         inputs = depset(
-            direct = [config, sdk_summary] + srcs + staged,
-            transitive = [dart_sdk_info.analyze_files, dependencies],
+            direct = [ctx.executable._tool, dart_sdk_info.dart, config, sdk_summary] + srcs + staged,
+            transitive = [dart_sdk_info.analyze_files, dart_sdk_info.runtime_files, dependencies],
         ),
         outputs = [summary],
         mnemonic = "DartAnalyzerSummary",

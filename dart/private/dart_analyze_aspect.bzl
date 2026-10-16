@@ -309,9 +309,9 @@ def _analyze_summaries(ctx, name, staged, summaries, sdk_summary, sdk_inputs):
     args.add("--sdk-summary", sdk_summary)
     args.add_all(summaries, before_each = "--summary")
     ctx.actions.run(
-        executable = ctx.executable._summary_tool,
-        arguments = [args],
-        inputs = depset(direct = [sdk_summary] + staged.inputs, transitive = [summaries, sdk_inputs]),
+        executable = dart_sdk_info.dart,
+        arguments = [ctx.executable._summary_tool.path, args],
+        inputs = depset(direct = [ctx.executable._summary_tool, sdk_summary] + staged.inputs, transitive = [summaries, sdk_inputs]),
         outputs = [stamp],
         mnemonic = "DartAnalyze",
         progress_message = "Analyzing Dart sources of %{label} against summaries",

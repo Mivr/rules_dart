@@ -23,8 +23,11 @@ import 'package:dart_style/dart_style.dart';
 // ignore: implementation_imports
 import 'package:dart_style/src/analysis_options/analysis_options_file.dart';
 // ignore: implementation_imports
+import 'package:dart_style/src/analysis_options/file_system.dart';
+// ignore: implementation_imports
 import 'package:dart_style/src/analysis_options/io_file_system.dart';
 import 'package:package_config/package_config.dart';
+import 'package:path/path.dart' as p;
 import 'package:pub_semver/pub_semver.dart';
 
 const _argvBudget = 8000;
@@ -121,6 +124,8 @@ Future<int> _runSingleRequest(
     return 64;
   }
 
+  _pruneOrphanedStagedFiles(project);
+
   final files = File(manifest)
       .readAsLinesSync()
       .where((l) => l.isNotEmpty)
@@ -148,7 +153,13 @@ Future<int> _runSingleRequest(
 
   final outBuf = StringBuffer();
   final errBuf = StringBuffer();
-  final fileSystem = IOFileSystem();
+  final projectRoot = p.normalize(p.absolute(project));
+  final srcRoot = p.normalize(p.join(projectRoot, 'src'));
+  final fileSystem = _BoundedFileSystem(
+    IOFileSystem(),
+    srcRoot: srcRoot,
+    projectRoot: projectRoot,
+  );
   final directoryConfigs = <String, PackageConfig?>{};
   final directoryOptions =
       <String, ({int? pageWidth, TrailingCommas? trailingCommas})>{};
@@ -160,7 +171,19 @@ Future<int> _runSingleRequest(
       return directoryConfigs[dir];
     }
     try {
-      return directoryConfigs[dir] = await findPackageConfig(file.parent);
+      var current = Directory(p.normalize(p.absolute(dir)));
+      while (true) {
+        final cfg = await findPackageConfig(current, recurse: false);
+        if (cfg != null) {
+          return directoryConfigs[dir] = cfg;
+        }
+        final normCurrent = p.normalize(current.path);
+        if (normCurrent == projectRoot) break;
+        final parent = current.parent;
+        if (p.normalize(parent.path) == normCurrent) break;
+        current = parent;
+      }
+      return directoryConfigs[dir] = null;
     } on Object {
       return directoryConfigs[dir] = null;
     }
@@ -358,10 +381,76 @@ int _runSubprocessFallback({
   return 0;
 }
 
+void _pruneOrphanedStagedFiles(String project) {
+  final srcDir = Directory(p.join(project, 'src'));
+  if (!srcDir.existsSync()) return;
+  final manifestFile = File(p.join(project, '.dart_tool', 'src_manifest.txt'));
+  if (!manifestFile.existsSync()) return;
+  final allowedPaths = <String>{
+    for (final line in manifestFile.readAsLinesSync())
+      if (line.isNotEmpty) p.normalize(p.absolute(p.join(srcDir.path, line))),
+  };
+  for (final entity in srcDir.listSync(recursive: true, followLinks: false)) {
+    if (entity is Directory) continue;
+    final normPath = p.normalize(entity.absolute.path);
+    if (!allowedPaths.contains(normPath)) {
+      try {
+        entity.deleteSync();
+      } on FileSystemException {
+        // Ignore if read-only or already removed.
+      }
+    }
+  }
+}
+
+/// Wraps [IOFileSystem] so upward directory walks for `analysis_options.yaml`
+/// stop at `<project>/src` (or `<project>`) and never escape into the shared
+/// Bazel execroot or host filesystem.
+final class _BoundedFileSystem implements FileSystem {
+  const _BoundedFileSystem(
+    this._delegate, {
+    required this.srcRoot,
+    required this.projectRoot,
+  });
+
+  final IOFileSystem _delegate;
+  final String srcRoot;
+  final String projectRoot;
+
+  Future<IOFileSystemPath> makePath(String path) => _delegate.makePath(path);
+
+  @override
+  Future<bool> fileExists(covariant IOFileSystemPath path) =>
+      _delegate.fileExists(path);
+
+  @override
+  Future<FileSystemPath> join(covariant IOFileSystemPath from, String to) =>
+      _delegate.join(from, to);
+
+  @override
+  Future<FileSystemPath?> parentDirectory(
+    covariant IOFileSystemPath path,
+  ) async {
+    final norm = p.normalize(p.absolute(path.path));
+    if (norm == srcRoot || norm == projectRoot) {
+      return null;
+    }
+    return _delegate.parentDirectory(path);
+  }
+
+  @override
+  Future<String> readFile(covariant IOFileSystemPath path) =>
+      _delegate.readFile(path);
+}
+
 String _unstage(String out, String project) {
   final relative = project.replaceAll(r'\', '/');
   final absolute = Directory(project).absolute.path.replaceAll(r'\', '/');
-  return out.replaceAll('$absolute/src/', '').replaceAll('$relative/src/', '');
+  final normalized = p.normalize(p.absolute(project)).replaceAll(r'\', '/');
+  return out
+      .replaceAll('$normalized/src/', '')
+      .replaceAll('$absolute/src/', '')
+      .replaceAll('$relative/src/', '');
 }
 
 bool _warned(String err) =>
