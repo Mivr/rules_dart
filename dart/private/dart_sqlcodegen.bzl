@@ -22,7 +22,7 @@ Usage:
     )
 """
 
-load("//dart:providers.bzl", "DartInfo", "DartPackageMetadataInfo")
+load("//dart:providers.bzl", "DartCompileInfo", "DartInfo", "DartPackageMetadataInfo")
 load(
     "//dart/private:common.bzl",
     "DEFAULT_ROOT_LANGUAGE_VERSION",
@@ -100,9 +100,22 @@ def _dart_sqlcodegen_impl(ctx):
 
     transitive = ([lib_dep_srcs] if lib_dep_srcs != None else []) + [sdk_files]
 
+    is_kernel_bin = (
+        DartCompileInfo in ctx.attr.generator_bin and
+        ctx.attr.generator_bin[DartCompileInfo].compile_mode == "kernel"
+    )
+    if is_kernel_bin:
+        executable = toolchain.dart_sdk_info.dart
+        arguments = [ctx.executable.generator_bin.path, args]
+        direct.append(ctx.executable.generator_bin)
+        transitive.append(toolchain.dart_sdk_info.runtime_files)
+    else:
+        executable = ctx.executable.generator_bin
+        arguments = [args]
+
     ctx.actions.run(
-        executable = ctx.executable.generator_bin,
-        arguments = [args],
+        executable = executable,
+        arguments = arguments,
         inputs = depset(direct = direct, transitive = transitive),
         outputs = outputs,
         mnemonic = "DartSqlCodegen",

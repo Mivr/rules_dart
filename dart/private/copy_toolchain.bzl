@@ -6,7 +6,12 @@ Dart SDK toolchain.
 """
 
 def _copy_toolchain_impl(ctx):
-    return [platform_common.ToolchainInfo(copy_tree = ctx.executable.tool)]
+    exec_sdk = ctx.toolchains["//dart:exec_tools_toolchain_type"].dart_sdk_info
+    return [platform_common.ToolchainInfo(
+        copy_tree = ctx.executable.tool,
+        dart = exec_sdk.dart,
+        runtime_files = exec_sdk.runtime_files,
+    )]
 
 copy_toolchain = rule(
     implementation = _copy_toolchain_impl,
@@ -19,4 +24,5 @@ copy_toolchain = rule(
             mandatory = True,
         ),
     },
+    toolchains = ["//dart:exec_tools_toolchain_type"],
 )

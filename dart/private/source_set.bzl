@@ -101,10 +101,11 @@ def assemble_source_dir(ctx, name, srcs, root_paths = ["."], replace_prefixes = 
     args.add(ctx.label.workspace_name)
     args.add_all(srcs, map_each = _copy_record, expand_directories = True)
 
+    copy_tc = ctx.toolchains[_COPY_TOOLCHAIN_TYPE]
     ctx.actions.run(
-        executable = ctx.toolchains[_COPY_TOOLCHAIN_TYPE].copy_tree,
-        arguments = [args],
-        inputs = srcs,
+        executable = copy_tc.dart,
+        arguments = [copy_tc.copy_tree.path, args],
+        inputs = depset(direct = [copy_tc.copy_tree] + srcs, transitive = [copy_tc.runtime_files]),
         outputs = [dst],
         mnemonic = "DartCopyTree",
         progress_message = "Copying files to directory %{output}",

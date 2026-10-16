@@ -24,7 +24,7 @@ exports_files(
 
 dart_binary(
     name = "analyze_runner",
-    compile_mode = "exe",
+    compile_mode = "kernel",
     main = "analyze_runner.dart",
     visibility = ["//dart:__subpackages__"],
 )
@@ -46,7 +46,7 @@ dart_binary(
 
 dart_binary(
     name = "fix_runner",
-    compile_mode = "exe",
+    compile_mode = "kernel",
     main = "fix_runner.dart",
     visibility = ["//dart:__subpackages__"],
 )
@@ -95,7 +95,7 @@ dart_test(
 # //dart:copy_toolchain_type. Only dart:io, so it names no pub dependencies.
 dart_binary(
     name = "copy_tree",
-    compile_mode = "exe",
+    compile_mode = "kernel",
     main = "copy_tree.dart",
     visibility = ["//dart:__subpackages__"],
 )
@@ -110,7 +110,7 @@ dart_test(
 
 dart_binary(
     name = "format_runner",
-    compile_mode = "exe",
+    compile_mode = "kernel",
     main = "format_runner.dart",
     visibility = ["//dart:__subpackages__"],
 )
@@ -125,7 +125,7 @@ dart_binary(
 
 dart_binary(
     name = "link_hook_runner",
-    compile_mode = "exe",
+    compile_mode = "kernel",
     main = "link_hook_runner.dart",
     # Public: rules calling `dart_link_hook_actions` declare it as an attribute.
     visibility = ["//visibility:public"],
@@ -140,7 +140,7 @@ dart_binary(
 # header.
 dart_binary(
     name = "kernel_link",
-    compile_mode = "exe",
+    compile_mode = "kernel",
     main = "kernel_link.dart",
     visibility = ["//visibility:public"],
 )
@@ -151,7 +151,7 @@ dart_binary(
 dart_binary(
     name = "kernel_module",
     srcs = ["dill_outline.dart"],
-    compile_mode = "exe",
+    compile_mode = "kernel",
     main = "kernel_module.dart",
     visibility = ["//visibility:public"],
 )

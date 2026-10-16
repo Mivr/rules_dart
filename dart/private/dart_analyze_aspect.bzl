@@ -279,9 +279,9 @@ def _analyze(ctx, name, staged, sdk_inputs):
     args.add("--stamp", stamp)
     args.add("--fatal-infos")
     ctx.actions.run(
-        executable = ctx.executable._analyze_tool,
-        arguments = [args],
-        inputs = depset(direct = staged.inputs, transitive = [sdk_inputs]),
+        executable = dart_sdk_info.dart,
+        arguments = [ctx.executable._analyze_tool.path, args],
+        inputs = depset(direct = [ctx.executable._analyze_tool] + staged.inputs, transitive = [sdk_inputs]),
         outputs = [stamp],
         mnemonic = "DartAnalyze",
         progress_message = "Analyzing Dart sources of %{label}",
@@ -311,7 +311,7 @@ def _analyze_summaries(ctx, name, staged, summaries, sdk_summary, sdk_inputs):
     ctx.actions.run(
         executable = ctx.executable._summary_tool,
         arguments = [args],
-        inputs = depset(direct = staged.inputs + [sdk_summary], transitive = [summaries, sdk_inputs]),
+        inputs = depset(direct = [sdk_summary] + staged.inputs, transitive = [summaries, sdk_inputs]),
         outputs = [stamp],
         mnemonic = "DartAnalyze",
         progress_message = "Analyzing Dart sources of %{label} against summaries",
@@ -456,9 +456,9 @@ def _format(ctx, name, staged, sdk_inputs, own_paths, language_version):
     # nothing to go on, said out loud so no staged config can answer instead.
     args.add("--language-version", language_version or "latest")
     ctx.actions.run(
-        executable = ctx.executable._format_tool,
-        arguments = [args],
-        inputs = depset(direct = staged.inputs + [manifest], transitive = [sdk_inputs]),
+        executable = dart_sdk_info.dart,
+        arguments = [ctx.executable._format_tool.path, args],
+        inputs = depset(direct = [ctx.executable._format_tool, manifest] + staged.inputs, transitive = [sdk_inputs]),
         outputs = [stamp],
         mnemonic = "DartFormat",
         progress_message = "Checking Dart formatting of %{label}",
@@ -516,12 +516,14 @@ def _dart_analyze_aspect_impl(target, ctx):
     dart_sdk_info = ctx.toolchains[_TOOLCHAIN].dart_sdk_info
 
     # The analyzer and `dart fix` read the SDK's launcher, its analysis snapshots
-    # and its `lib/` sources, which is the analyze subset, not the whole SDK.
-    sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.analyze_files])
+    # and its `lib/` sources, which is the analyze subset, plus `runtime_files`
+    # so the launcher can run the `.dill` runner tools (`analyze_runner`,
+    # `analyzer_summary`, `fix_runner`).
+    sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.analyze_files, dart_sdk_info.runtime_files])
 
     # The formatter reads no more of the SDK than the compiler does, so it takes
-    # the compile subset.
-    format_sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.compile_files])
+    # the compile subset (which also covers `dartvm` for `format_runner.dill`).
+    format_sdk_inputs = depset(direct = [dart_sdk_info.dart], transitive = [dart_sdk_info.compile_files, dart_sdk_info.runtime_files])
 
     tags = getattr(ctx.rule.attr, "tags", [])
     groups = {}
@@ -610,9 +612,9 @@ def _dart_analyze_aspect_impl(target, ctx):
     fix_args.add("--manifest", manifest)
     fix_args.add("--eligible", eligible)
     ctx.actions.run(
-        executable = ctx.executable._fix_tool,
-        arguments = [fix_args],
-        inputs = depset(direct = staged.inputs + [eligible], transitive = [sdk_inputs]),
+        executable = dart_sdk_info.dart,
+        arguments = [ctx.executable._fix_tool.path, fix_args],
+        inputs = depset(direct = [ctx.executable._fix_tool, eligible] + staged.inputs, transitive = [sdk_inputs]),
         outputs = [fixes, manifest, scratch],
         mnemonic = "DartFix",
         progress_message = "Computing Dart fixes for %{label}",

@@ -59,7 +59,7 @@ cost is amortised across the worker's lifetime.
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//dart:providers.bzl", "DartAnalyzableInfo", "DartInfo", "DartPackageMetadataInfo")
+load("//dart:providers.bzl", "DartAnalyzableInfo", "DartCompileInfo", "DartInfo", "DartPackageMetadataInfo")
 load(
     "//dart/private:common.bzl",
     "DEFAULT_ROOT_LANGUAGE_VERSION",
@@ -255,12 +255,26 @@ def _dart_codegen_impl(ctx):
             direct_inputs.extend(summaries)
             direct_inputs.append(sdk_summary)
 
+        is_kernel_bin = (
+            DartCompileInfo in ctx.attr.generator_bin and
+            ctx.attr.generator_bin[DartCompileInfo].compile_mode == "kernel"
+        )
+        if is_kernel_bin:
+            executable = dart
+            arguments = [ctx.executable.generator_bin.path, args]
+            direct_inputs.append(ctx.executable.generator_bin)
+            bin_sdk_files = script_sdk_files
+        else:
+            executable = ctx.executable.generator_bin
+            arguments = [args]
+            bin_sdk_files = sdk_files
+
         ctx.actions.run(
-            executable = ctx.executable.generator_bin,
-            arguments = [args],
+            executable = executable,
+            arguments = arguments,
             inputs = depset(
                 direct = direct_inputs,
-                transitive = _transitive(library_dep_srcs) + [sdk_files],
+                transitive = _transitive(library_dep_srcs) + [bin_sdk_files],
             ),
             outputs = outputs,
             mnemonic = "DartCodegen",

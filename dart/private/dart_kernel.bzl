@@ -344,6 +344,10 @@ def find_kernel_module_tools(dart_sdk_info):
       when the SDK lacks the worker snapshot.
     """
     sdk_root = sdk_path_from_dart(dart_sdk_info.dart)
+    dartvm_paths = [
+        sdk_root + "/bin/dartvm",
+        sdk_root + "/bin/dartvm.exe",
+    ]
     wanted = {
         "dartaotruntime": [
             sdk_root + "/bin/dartaotruntime",
@@ -353,14 +357,20 @@ def find_kernel_module_tools(dart_sdk_info):
         "platform_dill": [sdk_root + "/lib/_internal/vm_platform_strong.dill"],
         "libraries_json": [sdk_root + "/lib/libraries.json"],
     }
+    dartvm = None
     found = {}
     for f in dart_sdk_info.compile_files.to_list():
+        if f.path in dartvm_paths:
+            dartvm = f
         for key, paths in wanted.items():
             if f.path in paths:
                 found[key] = f
     if len(found) != len(wanted):
         return None
     return struct(
+        dart = dart_sdk_info.dart,
+        dartvm = dartvm,
+        runtime_files = dart_sdk_info.runtime_files,
         dartaotruntime = found["dartaotruntime"],
         kernel_worker = found["kernel_worker"],
         platform_dill = found["platform_dill"],
@@ -545,26 +555,46 @@ def kernel_module_action(
     if closure_excluded:
         args.add_all(closure_excluded, before_each = "--closure-excluded")
 
-    ctx.actions.run(
-        executable = ctx.executable._kernel_module,
-        # The startup arguments name the SDK's compiler, so every module of one SDK
-        # shares one worker. Bazel keeps the process running as a worker, and sends
-        # each request's arguments through the params file.
+    dart_exe = getattr(tools, "dart", None)
+    dartvm = getattr(tools, "dartvm", None)
+    direct_inputs = [
+        package_config,
+        tools.dartaotruntime,
+        tools.kernel_worker,
+        libraries,
+        platform,
+    ] + [s.file for s in sources]
+    if dart_exe != None:
+        direct_inputs.extend([ctx.executable._kernel_module, dart_exe])
+        if dartvm != None:
+            direct_inputs.append(dartvm)
+        executable = dart_exe
+        arguments = [
+            ctx.executable._kernel_module.path,
+            "--kernel-worker",
+            tools.kernel_worker.path,
+            "--dartaotruntime",
+            tools.dartaotruntime.path,
+            args,
+        ]
+    else:
+        executable = ctx.executable._kernel_module
         arguments = [
             "--kernel-worker",
             tools.kernel_worker.path,
             "--dartaotruntime",
             tools.dartaotruntime.path,
             args,
-        ],
+        ]
+
+    ctx.actions.run(
+        executable = executable,
+        # The startup arguments name the SDK's compiler, so every module of one SDK
+        # shares one worker. Bazel keeps the process running as a worker, and sends
+        # each request's arguments through the params file.
+        arguments = arguments,
         inputs = depset(
-            direct = [
-                package_config,
-                tools.dartaotruntime,
-                tools.kernel_worker,
-                libraries,
-                platform,
-            ] + [s.file for s in sources],
+            direct = direct_inputs,
             transitive = [dep_kmods] + [
                 d
                 for d in [extra_inputs, closure_excluded]
@@ -643,10 +673,22 @@ def kernel_link_action(
     if write_keys != None:
         outputs.append(write_keys)
 
+    exec_tc = ctx.toolchains[EXEC_TOOLS_TOOLCHAIN] if EXEC_TOOLS_TOOLCHAIN in ctx.toolchains else None
+    exec_sdk = exec_tc.dart_sdk_info if exec_tc != None else None
+    if exec_sdk != None:
+        direct_inputs.append(ctx.executable._kernel_link)
+        executable = exec_sdk.dart
+        arguments = [ctx.executable._kernel_link.path, args]
+        transitive_inputs = [dep_kmods, exec_sdk.runtime_files]
+    else:
+        executable = ctx.executable._kernel_link
+        arguments = [args]
+        transitive_inputs = [dep_kmods]
+
     ctx.actions.run(
-        executable = ctx.executable._kernel_link,
-        arguments = [args],
-        inputs = depset(direct = direct_inputs, transitive = [dep_kmods]),
+        executable = executable,
+        arguments = arguments,
+        inputs = depset(direct = direct_inputs, transitive = transitive_inputs),
         outputs = outputs,
         mnemonic = "DartKernelLink",
         progress_message = "Linking Dart kernel %s" % ctx.label,

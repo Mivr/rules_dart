@@ -188,11 +188,11 @@ def dart_link_hook_actions(ctx, runner, sdk, recorded_uses, deps, data_asset_ids
                 id = asset.id,
             ))
         ctx.actions.run(
-            executable = runner,
-            arguments = [args],
+            executable = sdk.dart,
+            arguments = [runner.path, args],
             inputs = depset(
-                [hook, package_config, recorded_uses],
-                transitive = [srcs, resources, sdk.tool_files],
+                [runner, hook, package_config, recorded_uses],
+                transitive = [srcs, resources, sdk.tool_files, sdk.runtime_files],
             ),
             outputs = outputs,
             mnemonic = "DartLinkHook",

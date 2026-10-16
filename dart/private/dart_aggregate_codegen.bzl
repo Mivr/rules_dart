@@ -45,7 +45,7 @@ Worker mode (`supports-workers=1`, protobuf, singleplex) is enabled for
 `generator_bin` actions; worker requests go through `dart/ext/lib/worker_entry.dart`.
 """
 
-load("//dart:providers.bzl", "DartInfo", "DartPackageMetadataInfo")
+load("//dart:providers.bzl", "DartCompileInfo", "DartInfo", "DartPackageMetadataInfo")
 load(
     "//dart/private:common.bzl",
     "DEFAULT_ROOT_LANGUAGE_VERSION",
@@ -124,10 +124,24 @@ def _dart_aggregate_codegen_impl(ctx):
     transitive.append(dart_sdk_info.analyze_files)
 
     if ctx.executable.generator_bin:
+        is_kernel_bin = (
+            DartCompileInfo in ctx.attr.generator_bin and
+            ctx.attr.generator_bin[DartCompileInfo].compile_mode == "kernel"
+        )
+        if is_kernel_bin:
+            executable = dart_sdk_info.dart
+            arguments = [ctx.executable.generator_bin.path, args]
+            direct_inputs = direct_inputs + [ctx.executable.generator_bin]
+            bin_transitive = transitive + [dart_sdk_info.runtime_files]
+        else:
+            executable = ctx.executable.generator_bin
+            arguments = [args]
+            bin_transitive = transitive
+
         ctx.actions.run(
-            executable = ctx.executable.generator_bin,
-            arguments = [args],
-            inputs = depset(direct = direct_inputs, transitive = transitive),
+            executable = executable,
+            arguments = arguments,
+            inputs = depset(direct = direct_inputs, transitive = bin_transitive),
             outputs = outputs,
             mnemonic = "DartAggregateCodegen",
             progress_message = "DartAggregateCodegen %s" % ctx.label,

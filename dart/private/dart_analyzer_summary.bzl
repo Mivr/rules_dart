@@ -209,7 +209,9 @@ def _analyzer_sdk_summary_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = dart_sdk_info.analyze_files,
+        inputs = depset(
+            transitive = [dart_sdk_info.analyze_files],
+        ),
         outputs = [summary],
         mnemonic = "DartAnalyzerSdkSummary",
         progress_message = "Summarizing the Dart SDK for analysis",
@@ -475,7 +477,10 @@ def _dart_analyzer_summary_impl(target, ctx):
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = depset(direct = srcs + staged + [config, sdk_summary], transitive = [dart_sdk_info.analyze_files, dependencies]),
+        inputs = depset(
+            direct = [config, sdk_summary] + srcs + staged,
+            transitive = [dart_sdk_info.analyze_files, dependencies],
+        ),
         outputs = [summary],
         mnemonic = "DartAnalyzerSummary",
         progress_message = "Summarizing Dart library %{label}",
