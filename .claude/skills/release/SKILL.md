@@ -185,7 +185,7 @@ be green against local WIP rules_dart before pushing.
 ## Phase 5 — Tag the rules_dart release & watch
 
 1. Preview the release notes and show them to the user before tagging:
-   `bazel run //tools/changelog -- --tag $TARGET`. They are the `Changelog:` trailers
+   `cd tools && bazel run //changelog:changelog -- --tag $TARGET`. They are the `Changelog:` trailers
    since the last tag (policy in `AGENTS.md`); `release_prep.sh` puts the same text in
    the GitHub release body, and `pub-publish` copies that body into
    `dart/runfiles/CHANGELOG.md`. A missing or badly worded entry is fixed by a new commit

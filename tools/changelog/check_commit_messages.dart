@@ -1,8 +1,8 @@
 // Checks commit messages against the commit policy in AGENTS.md: a
 // conventional-commit subject, and the `Changelog:` trailer rules.
 //
-//   bazel run //tools/changelog:check -- <message-file>   (commit-msg hook)
-//   bazel run //tools/changelog:check -- --range A..B     (CI)
+//   (cd tools && bazel run //changelog:check -- <message-file>)   (commit-msg hook)
+//   (cd tools && bazel run //changelog:check -- --range A..B)     (CI)
 //
 // Identical in rules_dart, rules_dart_proto, rules_flutter and frustrate.
 import 'dart:convert';

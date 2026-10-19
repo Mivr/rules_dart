@@ -1,13 +1,13 @@
 load("@rules_dart//dart:defs.bzl", "dart_binary")
 load("@rules_multitool//multitool:workspace_root.bzl", "workspace_root")
 
-# `bazel run //tools/changelog` prints the unreleased release notes;
+# `cd tools && bazel run //changelog:changelog` prints the unreleased release notes;
 # `-- --tag vX.Y.Z` previews them under that version.
 workspace_root(
     name = "changelog",
     args = [
         "--config",
-        "cliff.toml",
+        "../cliff.toml",
         "--unreleased",
         "--strip",
         "header",

@@ -19,5 +19,10 @@ jobs:
         with:
           bazelisk-cache: true
           repository-cache: true
+      - name: Configure Bazel version
+        working-directory: tools
+        run: echo "9.3.0" > .bazelversion
       - name: Check commit messages
-        run: bazel run //tools/changelog:check -- --range "${{ github.event.before }}..${{ github.sha }}"
+        run: |
+          cd tools
+          bazel run //changelog:check -- --range "${{ github.event.before }}..${{ github.sha }}"

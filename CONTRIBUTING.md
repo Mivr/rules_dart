@@ -41,7 +41,9 @@ the commit-msg hook that `prek install` sets up checks each commit before that.
 ### Unit tests and Gazelle plugin tests (root workspace)
 
 ```shell
-bazel test //dart/tests:versions_test //dev:gazelle_test //dev:gazelle_generation_test
+bazel test //dart/tests:versions_test
+# Gazelle tests live in the nested dev module:
+cd dev && bazel test //:gazelle_test //:gazelle_generation_test
 ```
 
 ### End-to-end tests (separate Bazel workspaces)

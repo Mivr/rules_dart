@@ -36,6 +36,9 @@ jobs:
           - "9.3.0"
         folder:
           - "."
+          - "dev"
+          - "tools"
+          - ".github/workflows"
           - "e2e/smoke"
           - "e2e/hello_world"
           - "e2e/library_deps"

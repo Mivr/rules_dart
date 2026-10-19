@@ -5,3 +5,17 @@ repo(
         "//:package_metadata",
     ],
 )
+
+# Dev-only tooling lives in nested modules (dev/, tools/, .github/workflows/)
+# so it is not part of the published rules_dart module. Keep them out of the
+# root module's package set too, including `//...` queries.
+ignore_directories([
+    "bazel-*",
+    "dev",
+    "tools",
+    ".github",
+    "e2e",
+    "docs",
+    "references",
+    ".claude",
+])

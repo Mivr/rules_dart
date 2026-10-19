@@ -46,11 +46,11 @@ other trailers, with no blank line inside that paragraph. Mark breaking changes
 with `!` in the subject (`feat(ios)!: ...`), not a `BREAKING CHANGE:` footer,
 which git does not treat as a trailer.
 
-**Checks.** `bazel run //tools/changelog:check` checks the commit subject and
+**Checks.** `cd tools && bazel run //changelog:check` checks the commit subject and
 the trailers. It runs as the `commit-msg` hook, and in CI on every push where
 the repo has CI. To install the hook, `uv tool install prek`, then
 `prek install -f` (without `-f`, prek keeps an existing hook and runs both).
-`bazel run //tools/changelog` prints the unreleased notes so you can see how
+`cd tools && bazel run //changelog:changelog` prints the unreleased notes so you can see how
 they read.
 
 ## Tooling
