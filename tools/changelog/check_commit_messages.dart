@@ -17,6 +17,10 @@ final _conventional = RegExp(
 final _userVisibleType = RegExp(r'^(feat|fix|perf)[(!:]');
 final _exempt = RegExp(r'^(fixup!|squash!|amend!|Merge |Revert ")');
 final _entryStart = RegExp(r'^[A-Z`]');
+// What running a trailer through a shell leaves behind: the `'\''` and
+// `'"'"'` quoting workarounds, or a backslash directly before a quote.
+// Plain apostrophes ("Don't") and plain quotes are fine.
+final _shellQuoting = RegExp(r"""'\''|'"'"'|\\['"]""");
 final _anyChangelogLine = RegExp(
   r'^changelog:',
   caseSensitive: false,
@@ -118,6 +122,7 @@ Future<List<String>> check(String message) async {
 /// order; empty when every entry is fine.
 List<String> checkEntries(List<String> entries) {
   final problems = <String>[];
+  final seen = <String>{};
   for (final entry in entries) {
     if (entry == 'skip') continue;
     if (entry.length > _maxEntryLength) {
@@ -130,6 +135,15 @@ List<String> checkEntries(List<String> entries) {
       problems.add(
         'Changelog entry must start with a capital letter or `code`: $entry',
       );
+    }
+    if (_shellQuoting.hasMatch(entry)) {
+      problems.add('Changelog entry has a shell-quoting artifact: $entry');
+    }
+    if ('`'.allMatches(entry).length.isOdd) {
+      problems.add('Changelog entry has unbalanced backticks: $entry');
+    }
+    if (!seen.add(entry)) {
+      problems.add('Changelog entry is a duplicate: $entry');
     }
   }
   return problems;
