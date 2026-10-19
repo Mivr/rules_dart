@@ -16,6 +16,11 @@ use_repo(dart, "dart_toolchains")
 register_toolchains("@dart_toolchains//:all")
 ```
 
+A `dart.toolchain(...)` request from the root module takes precedence over
+requests from dependencies (rules_dart's included), even when the root's version
+is older; with no root request, the highest requested version is selected.
+```
+
 ## Usage
 
 ### Running the Dart SDK

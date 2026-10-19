@@ -2,8 +2,10 @@
 
 Installs a Dart toolchain.
 Every module can define a toolchain version under the default name, "dart".
-The latest of those versions will be selected (the rest discarded),
-and will always be registered by rules_dart.
+The root module's request wins when present, even if it is older than a
+dependency's request (rules_dart's included); otherwise the highest requested
+version is selected. A root pin older than a dependency's request prints a
+NOTE naming both versions.
 
 Additionally, the root module can define arbitrarily many more toolchain versions under different
 names (the latest version will be picked for each name) and can register them as it sees fit,
@@ -20,7 +22,11 @@ dart_toolchain = tag_class(attrs = {
 Base name for generated repositories, allowing more than one Dart toolchain to be registered.
 Overriding the default is only permitted in the root module.
 """, default = _DEFAULT_NAME),
-    "dart_version": attr.string(doc = "Explicit version of the Dart SDK.", mandatory = True),
+    "dart_version": attr.string(doc = """\
+Explicit version of the Dart SDK. A version requested by the root module takes
+precedence over versions requested by dependencies (rules_dart's included), even
+when the root's version is older; without a root request, the highest requested
+version is selected.""", mandatory = True),
 })
 
 def _toolchain_extension(module_ctx):
@@ -57,5 +63,5 @@ dart = module_extension(
     tag_classes = {"toolchain": dart_toolchain},
     os_dependent = False,
     arch_dependent = False,
-    doc = "Installs a Dart SDK toolchain. Multiple modules may request different versions; the latest is selected.",
+    doc = """Installs a Dart SDK toolchain. Multiple modules may request different versions. The root module's request wins when present (even if older than a dependency's); otherwise the highest requested version is selected.""",
 )
