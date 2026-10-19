@@ -110,6 +110,16 @@ Future<List<String>> check(String message) async {
     }
   }
 
+  problems.addAll(changelogProblems(entries));
+  return problems;
+}
+
+/// The per-entry `Changelog:` rules, as a pure function.
+///
+/// [entries] are the trailer values in message order; `skip` is exempt. Every
+/// rule that fails adds one problem naming the rule and quoting the entry.
+List<String> changelogProblems(Iterable<String> entries) {
+  final problems = <String>[];
   for (final entry in entries) {
     if (entry == 'skip') continue;
     if (entry.length > _maxEntryLength) {
