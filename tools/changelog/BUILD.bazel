@@ -1,4 +1,4 @@
-load("@rules_dart//dart:defs.bzl", "dart_binary")
+load("@rules_dart//dart:defs.bzl", "dart_binary", "dart_test")
 load("@rules_multitool//multitool:workspace_root.bzl", "workspace_root")
 
 # `bazel run //tools/changelog` prints the unreleased release notes;
@@ -20,4 +20,13 @@ workspace_root(
 dart_binary(
     name = "check",
     main = "check_commit_messages.dart",
+)
+
+# Unit tests for the per-entry `Changelog:` rules, which `check` applies.
+dart_test(
+    name = "check_test",
+    size = "small",
+    srcs = ["check_commit_messages.dart"],
+    main = "check_test.dart",
+    deps = ["@ext_pub_deps//:test"],
 )

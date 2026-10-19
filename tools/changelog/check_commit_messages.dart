@@ -17,6 +17,12 @@ final _conventional = RegExp(
 final _userVisibleType = RegExp(r'^(feat|fix|perf)[(!:]');
 final _exempt = RegExp(r'^(fixup!|squash!|amend!|Merge |Revert ")');
 final _entryStart = RegExp(r'^[A-Z`]');
+
+// A shell-quoting artifact: a backslash directly before a quote character, or
+// the quoted quote `'"'"'` that `sh` uses in place of `\'` inside single quotes.
+final _backslashQuote = RegExp(r'''\\['"]''');
+const _quotedQuote = """'"'"'""";
+final _backtick = RegExp('`');
 final _anyChangelogLine = RegExp(
   r'^changelog:',
   caseSensitive: false,
@@ -120,6 +126,7 @@ Future<List<String>> check(String message) async {
 /// rule that fails adds one problem naming the rule and quoting the entry.
 List<String> changelogProblems(Iterable<String> entries) {
   final problems = <String>[];
+  final seen = <String>{};
   for (final entry in entries) {
     if (entry == 'skip') continue;
     if (entry.length > _maxEntryLength) {
@@ -132,6 +139,15 @@ List<String> changelogProblems(Iterable<String> entries) {
       problems.add(
         'Changelog entry must start with a capital letter or `code`: $entry',
       );
+    }
+    if (_backslashQuote.hasMatch(entry) || entry.contains(_quotedQuote)) {
+      problems.add('Changelog entry contains shell-quoting escapes: $entry');
+    }
+    if (_backtick.allMatches(entry).length.isOdd) {
+      problems.add('Changelog entry has unbalanced backticks: $entry');
+    }
+    if (!seen.add(entry)) {
+      problems.add('Changelog entry is a duplicate of an earlier one: $entry');
     }
   }
   return problems;
