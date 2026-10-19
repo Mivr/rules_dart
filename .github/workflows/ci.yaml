@@ -23,53 +23,130 @@ concurrency:
   group: concurrency-group::${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
+  # The e2e workspaces (plus `.`, `dev`, `tools` and `.github/workflows`) used
+  # to run as one CI job per (OS, folder): ~90 jobs whose macOS third queued
+  # behind the account's 5 shared macOS slots. Linux and Windows now run as 6
+  # shard jobs sharing one Bazel disk cache per shard: one cache restore and
+  # one Bazelisk install per job instead of one per folder. Push CI runs a
+  # single macOS smoke job (`mac-smoke`); the full per-folder macOS coverage
+  # runs in the `full.yaml` pre-release workflow. Every folder still runs
+  # `bazel test //...` with the same flags on every OS it ran on before (exit
+  # code 4 still means "no test targets"). Folders in a shard run a few at a
+  # time (`parallelism` waves); each folder's full log is printed under a
+  # `===== <folder> =====` header so the executed-test counts stay auditable.
+  # The per-shard `cache` name keys the shared disk cache; the repository,
+  # external and bazelisk caches keep their shared keys.
   test:
+    name: test (${{ matrix.os }}, shard ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-        bazelversion:
-          - "9.3.0"
-        folder:
-          - "."
-          - "dev"
-          - "tools"
-          - ".github/workflows"
-          - "e2e/smoke"
-          - "e2e/hello_world"
-          - "e2e/library_deps"
-          - "e2e/analysis"
-          - "e2e/dart_test"
-          - "e2e/dart_test_pkg"
-          - "e2e/codegen"
-          - "e2e/pub_deps"
-          - "e2e/pub_lock"
-          - "e2e/pub_lock_git"
-          - "e2e/pub_lock_scc"
-          - "e2e/web_app"
-          - "e2e/gazelle"
-          - "e2e/cross_compile"
-          - "e2e/pub_lock_cross_module"
-          - "e2e/pub_lock_dedup"
-          - "e2e/pub_lock_upgrade"
-          - "e2e/ext_exemplar"
-          - "e2e/dual_build"
-          - "e2e/fix"
-          - "e2e/analyze_composition"
-          - "e2e/link_hook"
-          - "e2e/isolated_hub"
-        bzlmodEnabled:
-          - true
+        include:
+          - os: ubuntu-latest
+            shard: 1
+            parallelism: 3
+            cache: test-linux-1
+            folders: |
+              .
+              e2e/fix
+              e2e/link_hook
+              e2e/codegen
+              e2e/analyze_composition
+              e2e/cross_compile
+              tools
+              e2e/pub_deps
+          - os: ubuntu-latest
+            shard: 2
+            parallelism: 3
+            cache: test-linux-2
+            folders: |
+              e2e/pub_lock_upgrade
+              dev
+              .github/workflows
+              e2e/pub_lock_scc
+              e2e/pub_lock
+              e2e/dart_test_pkg
+              e2e/hello_world
+              e2e/dual_build
+              e2e/isolated_hub
+              e2e/analysis
+          - os: ubuntu-latest
+            shard: 3
+            parallelism: 3
+            cache: test-linux-3
+            folders: |
+              e2e/ext_exemplar
+              e2e/web_app
+              e2e/gazelle
+              e2e/smoke
+              e2e/library_deps
+              e2e/dart_test
+              e2e/pub_lock_git
+              e2e/pub_lock_cross_module
+              e2e/pub_lock_dedup
+          - os: windows-latest
+            shard: 1
+            parallelism: 3
+            cache: test-windows-1
+            # The root workspace alone: with other folders running beside it
+            # on the same runner its 19k actions take 3x longer, which sets
+            # the whole run's wall time. Alone it finishes in ~4 minutes.
+            folders: |
+              .
+          - os: windows-latest
+            shard: 2
+            parallelism: 3
+            cache: test-windows-2
+            # e2e/link_hook alone, for the same reason as the root workspace.
+            folders: |
+              e2e/link_hook
+          - os: windows-latest
+            shard: 3
+            parallelism: 3
+            cache: test-windows-3
+            folders: |
+              e2e/ext_exemplar
+              e2e/web_app
+              e2e/gazelle
+              e2e/smoke
+              e2e/library_deps
+              e2e/dart_test
+              e2e/pub_lock_git
+              e2e/pub_lock_cross_module
+              e2e/pub_lock_dedup
+          - os: windows-latest
+            shard: 4
+            parallelism: 3
+            cache: test-windows-4
+            folders: |
+              e2e/fix
+              e2e/codegen
+              e2e/analyze_composition
+              e2e/cross_compile
+              tools
+              e2e/pub_deps
+              e2e/pub_lock_upgrade
+              dev
+          - os: windows-latest
+            shard: 5
+            parallelism: 3
+            cache: test-windows-5
+            folders: |
+              .github/workflows
+              e2e/pub_lock_scc
+              e2e/pub_lock
+              e2e/dart_test_pkg
+              e2e/hello_world
+              e2e/dual_build
+              e2e/isolated_hub
+              e2e/analysis
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.event_name != 'schedule' && !inputs.uncached && format('{0}-{1}-{2}', matrix.bazelversion, matrix.folder, matrix.bzlmodEnabled) || false }}
+          disk-cache: ${{ github.event_name != 'schedule' && !inputs.uncached && matrix.cache || false }}
           external-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
           repository-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
           cache-save: ${{ github.event_name != 'schedule' && !inputs.uncached }}
@@ -77,20 +154,114 @@ jobs:
           bazelrc: |
             common --announce_rc
             common --color=yes
-            common --enable_bzlmod=${{ matrix.bzlmodEnabled }}
-      - name: Configure Bazel version
-        working-directory: ${{ matrix.folder }}
-        run: |
-          echo "${{ matrix.bazelversion }}" > .bazelversion
-          bazel version
-      # Exit code 4 means "build succeeded but no test targets found", which is
-      # expected for build-only e2e folders like web_app and pub_deps.
-      # Wrapped in bash -c because the reusable workflow uses the runner's
-      # default shell (PowerShell on Windows) where [ $? -eq 4 ] is invalid.
-      # Inner single quotes prevent the outer shell from expanding $?.
+            common --enable_bzlmod=true
       - name: Test
-        working-directory: ${{ matrix.folder }}
+        env:
+          FOLDERS: ${{ matrix.folders }}
+          PARALLELISM: ${{ matrix.parallelism }}
+        # Explicit bash: the default shell is PowerShell on Windows, where the
+        # wave below is not valid. The per-folder command keeps the old
+        # `bash -c '... || [ $? -eq 4 ]'`, so Windows still runs it under bash.
+        shell: bash
+        run: |
+          ws="${GITHUB_WORKSPACE//\\//}"
+          logdir="$(mktemp -d)"
+          # Pin the Bazel version in every folder of this shard, as the old
+          # per-folder Configure step did.
+          while IFS= read -r folder; do
+            [ -z "$folder" ] && continue
+            echo "9.3.0" > "$ws/$folder/.bazelversion"
+          done <<< "$FOLDERS"
+          run_one() {
+            slug="$(printf '%s' "$1" | tr '/.' '_')"
+            # Same command and flags as the old per-folder Test step.
+            # Exit code 4 means "build succeeded but no test targets found".
+            if ( cd "$ws/$1" && bash -c 'bazel test --test_output=errors //... || [ $? -eq 4 ]' ) >"$logdir/$slug.log" 2>&1; then
+              echo 0 >"$logdir/$slug.status"
+            else
+              echo 1 >"$logdir/$slug.status"
+            fi
+          }
+          # Windows runners fail when the first Bazel servers start at once:
+          # they race creating the shared base directory (error 183). Start
+          # each folder's server serially first; the waves below then attach
+          # to the running servers.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            while IFS= read -r folder; do
+              [ -z "$folder" ] && continue
+              ( cd "$ws/$folder" && bazel version ) >/dev/null 2>&1 || true
+            done <<< "$FOLDERS"
+          fi
+          running=0
+          while IFS= read -r folder; do
+            [ -z "$folder" ] && continue
+            run_one "$folder" &
+            running=$((running + 1))
+            if [ "$running" -ge "$PARALLELISM" ]; then
+              wait
+              running=0
+            fi
+          done <<< "$FOLDERS"
+          wait
+          fail=0
+          while IFS= read -r folder; do
+            [ -z "$folder" ] && continue
+            slug="$(printf '%s' "$folder" | tr '/.' '_')"
+            echo "===== $folder (exit $(cat "$logdir/$slug.status")) ====="
+            cat "$logdir/$slug.log"
+            [ "$(cat "$logdir/$slug.status")" = 0 ] || fail=1
+          done <<< "$FOLDERS"
+          exit "$fail"
+      # Guards Mivr/rules_dart#1: a minimal consuming module must be able to
+      # enumerate the whole published module. Dev-only tooling lives in nested
+      # modules excluded via REPO.bazel `ignore_directories`, so no package under
+      # @rules_dart//... may load a dev-only repository. `e2e/smoke` is that
+      # minimal consumer (local_path_override to the repo root). It runs here,
+      # once per OS, instead of in its own job.
+      - name: Consumer query
+        if: matrix.shard == 1
+        working-directory: e2e/smoke
+        run: |
+          echo "9.3.0" > .bazelversion
+          bazel query "@rules_dart//..."
+  # Push CI's only macOS job: a fast smoke test. The macOS-specific risks are
+  # toolchain/SDK resolution for macOS-arm64 and action execution under the
+  # darwin sandbox; `e2e/hello_world` exercises both through a representative
+  # build+test (four `dart_binary` compile modes under the analyzer aspect),
+  # and the consumer query keeps the Mivr/rules_dart#1 module-enumeration
+  # guard on macOS. Full per-folder macOS coverage runs in the `full.yaml`
+  # pre-release workflow, which releases require.
+  mac-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.event_name != 'schedule' && !inputs.uncached && 'smoke-macos' || false }}
+          external-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
+          repository-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
+          cache-save: ${{ github.event_name != 'schedule' && !inputs.uncached }}
+          cache-version: "1"
+          bazelrc: |
+            common --announce_rc
+            common --color=yes
+            common --enable_bzlmod=true
+      - name: Configure Bazel version
+        working-directory: e2e/hello_world
+        run: |
+          echo "9.3.0" > .bazelversion
+          bazel version
+      # Exit code 4 means "build succeeded but no test targets found".
+      # Same command as the old per-folder Test step for this workspace.
+      - name: Test hello_world
+        working-directory: e2e/hello_world
         run: "bash -c 'bazel test --test_output=errors //... || [ $? -eq 4 ]'"
+      - name: Consumer query
+        working-directory: e2e/smoke
+        run: |
+          echo "9.3.0" > .bazelversion
+          bazel query "@rules_dart//..."
   # `dart format` and `dart analyze` find their configuration by walking up from
   # the file they are given, and that walk does not stop at the project root. It
   # used to escape: under a sandbox it found nothing (so a repo's configured
@@ -371,33 +542,6 @@ jobs:
       - name: dart_test — run tests under -c dbg
         working-directory: e2e/dart_test
         run: bazel test -c dbg --test_output=errors //...
-  # Guards Mivr/rules_dart#1: a minimal consuming module must be able to
-  # enumerate the whole published module. Dev-only tooling lives in nested
-  # modules excluded via REPO.bazel `ignore_directories`, so no package under
-  # @rules_dart//... may load a dev-only repository. `e2e/smoke` is that
-  # minimal consumer (local_path_override to the repo root).
-  consumer-query:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
-        with:
-          bazelisk-cache: true
-          disk-cache: true
-          repository-cache: true
-      - name: Configure Bazel version
-        working-directory: e2e/smoke
-        run: echo "9.3.0" > .bazelversion
-      - name: Query the whole published module from a consumer
-        working-directory: e2e/smoke
-        run: bazel query "@rules_dart//..."
   pre-commit:
     runs-on: ubuntu-latest
     steps:
@@ -409,7 +553,13 @@ jobs:
   # For branch protection settings, this job provides a "stable" name that can be used to gate PR merges
   # on "all matrix jobs were successful".
   conclusion:
-    needs: [test, expected-failure, dbg-mode, consumer-query, pre-commit]
+    needs:
+      - test
+      - mac-smoke
+      - format-hermeticity
+      - expected-failure
+      - dbg-mode
+      - pre-commit
     runs-on: ubuntu-latest
     if: always()
     steps:

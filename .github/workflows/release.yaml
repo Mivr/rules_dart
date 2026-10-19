@@ -16,7 +16,38 @@ permissions:
   attestations: write
   contents: write
 jobs:
+  # Releases require the pre-release coverage: at least one passing run of
+  # the Full matrix workflow on the tagged commit. A tag push triggers that
+  # workflow too, so this usually just waits for it; otherwise it fails and
+  # tells the developer to run the Full matrix workflow for the commit first.
+  full-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for a passing full-matrix run on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="${{ github.sha }}"
+          deadline=$(( $(date +%s) + 5400 ))
+          while true; do
+            if ! runs="$(gh run list --repo "${{ github.repository }}" --workflow full.yaml --commit "$sha" --limit 10 --json status,conclusion)"; then
+              echo "Listing runs failed; retrying..."
+            elif [ "$(echo "$runs" | jq -r '[.[] | select(.status == "completed" and .conclusion == "success")] | length > 0')" = "true" ]; then
+              echo "Found a passing full-matrix run on $sha"
+              exit 0
+            elif [ "$(echo "$runs" | jq -r '[.[] | select(.status != "completed")] | length > 0')" != "true" ]; then
+              echo "No passing full-matrix run on $sha and none in flight; run the Full matrix workflow for this commit first"
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "Timed out waiting for a passing full-matrix run on $sha"
+              exit 1
+            fi
+            echo "Waiting for the full-matrix run on $sha..."
+            sleep 60
+          done
   release:
+    needs: full-matrix
     uses: bazel-contrib/.github/.github/workflows/release_ruleset.yaml@v7.7.0
     with:
       release_files: rules_dart-*.tar.gz

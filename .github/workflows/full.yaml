@@ -1,0 +1,128 @@
+name: Full matrix
+# Pre-release coverage: the complete per-folder macOS matrix that push CI
+# (ci.yaml) no longer runs. Linux and Windows keep full coverage on every
+# push, so they are not repeated here. Releases require a passing run of this
+# workflow on the tagged commit (see release.yaml); it also runs weekly and
+# on demand. It has no 7-minute target, but its macOS jobs run one at a time
+# (`max-parallel: 1`) so a concurrent push run's macOS smoke job keeps a slot.
+on:
+  workflow_dispatch:
+    inputs:
+      uncached:
+        description: Run every test job without restoring or saving any Bazel cache
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+  schedule:
+    - cron: "0 10 * * 1"
+concurrency:
+  group: concurrency-group::${{ github.workflow }}::${{ github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+jobs:
+  # Same folders, commands and flags as the old per-folder macOS jobs from
+  # ci.yaml, in 2 shards sharing one Bazel disk cache per shard. The
+  # repository, external and bazelisk caches keep their shared keys.
+  test-macos:
+    name: test-macos (shard ${{ matrix.shard }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - shard: 1
+            parallelism: 3
+            cache: full-macos-1
+            folders: |
+              .
+              e2e/pub_lock_upgrade
+              dev
+              e2e/web_app
+              .github/workflows
+              e2e/fix
+              e2e/pub_lock_scc
+              e2e/codegen
+              e2e/pub_lock
+              e2e/hello_world
+              e2e/smoke
+              e2e/dart_test
+              e2e/dual_build
+              e2e/analysis
+          - shard: 2
+            parallelism: 3
+            cache: full-macos-2
+            folders: |
+              e2e/ext_exemplar
+              e2e/gazelle
+              e2e/link_hook
+              tools
+              e2e/analyze_composition
+              e2e/cross_compile
+              e2e/pub_deps
+              e2e/pub_lock_git
+              e2e/pub_lock_cross_module
+              e2e/pub_lock_dedup
+              e2e/library_deps
+              e2e/dart_test_pkg
+              e2e/isolated_hub
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.event_name != 'schedule' && !inputs.uncached && matrix.cache || false }}
+          external-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
+          repository-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
+          cache-save: ${{ github.event_name != 'schedule' && !inputs.uncached }}
+          cache-version: "1"
+          bazelrc: |
+            common --announce_rc
+            common --color=yes
+            common --enable_bzlmod=true
+      - name: Test
+        env:
+          FOLDERS: ${{ matrix.folders }}
+          PARALLELISM: ${{ matrix.parallelism }}
+        shell: bash
+        run: |
+          ws="${GITHUB_WORKSPACE//\\//}"
+          logdir="$(mktemp -d)"
+          # Pin the Bazel version in every folder of this shard, as the old
+          # per-folder Configure step did.
+          while IFS= read -r folder; do
+            [ -z "$folder" ] && continue
+            echo "9.3.0" > "$ws/$folder/.bazelversion"
+          done <<< "$FOLDERS"
+          run_one() {
+            slug="$(printf '%s' "$1" | tr '/.' '_')"
+            # Same command and flags as the old per-folder Test step.
+            # Exit code 4 means "build succeeded but no test targets found".
+            if ( cd "$ws/$1" && bash -c 'bazel test --test_output=errors //... || [ $? -eq 4 ]' ) >"$logdir/$slug.log" 2>&1; then
+              echo 0 >"$logdir/$slug.status"
+            else
+              echo 1 >"$logdir/$slug.status"
+            fi
+          }
+          running=0
+          while IFS= read -r folder; do
+            [ -z "$folder" ] && continue
+            run_one "$folder" &
+            running=$((running + 1))
+            if [ "$running" -ge "$PARALLELISM" ]; then
+              wait
+              running=0
+            fi
+          done <<< "$FOLDERS"
+          wait
+          fail=0
+          while IFS= read -r folder; do
+            [ -z "$folder" ] && continue
+            slug="$(printf '%s' "$folder" | tr '/.' '_')"
+            echo "===== $folder (exit $(cat "$logdir/$slug.status")) ====="
+            cat "$logdir/$slug.log"
+            [ "$(cat "$logdir/$slug.status")" = 0 ] || fail=1
+          done <<< "$FOLDERS"
+          exit "$fail"
