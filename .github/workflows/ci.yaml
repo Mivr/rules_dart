@@ -34,6 +34,9 @@ jobs:
   # code 4 still means "no test targets"). Folders in a shard run a few at a
   # time (`parallelism` waves); each folder's full log is printed under a
   # `===== <folder> =====` header so the executed-test counts stay auditable.
+  # Each folder runs under its own Bazel server (`--output_base`): the folders
+  # of a shard otherwise share the output base setup-bazel pins, so concurrent
+  # folders kill each other's servers and flake with exit 1.
   # The per-shard `cache` name keys the shared disk cache; the repository,
   # external and bazelisk caches keep their shared keys.
   test:
@@ -156,7 +159,7 @@ jobs:
           # partial run stays stale forever and every later run misses against
           # it. Bump this after a sharding change or a poisoned key; the next
           # run is cold once, then its post-job saves write complete entries.
-          cache-version: "2"
+          cache-version: "3"
           bazelrc: |
             common --announce_rc
             common --color=yes
@@ -172,6 +175,9 @@ jobs:
         run: |
           ws="${GITHUB_WORKSPACE//\\//}"
           logdir="$(mktemp -d)"
+          # One Bazel server per folder (see run_one below). Native path: the
+          # Windows bazel.exe does not understand msys /tmp spellings.
+          outbasedir="${RUNNER_TEMP}/bazel-servers"
           # Pin the Bazel version in every folder of this shard, as the old
           # per-folder Configure step did.
           while IFS= read -r folder; do
@@ -180,22 +186,26 @@ jobs:
           done <<< "$FOLDERS"
           run_one() {
             slug="$(printf '%s' "$1" | tr '/.' '_')"
-            # Same command and flags as the old per-folder Test step.
+            # Same test command and flags as the old per-folder Test step, plus
+            # a per-folder --output_base so the folder gets its own Bazel
+            # server. The disk and repository caches stay shared, so warmth is
+            # unaffected.
             # Exit code 4 means "build succeeded but no test targets found".
-            if ( cd "$ws/$1" && bash -c 'bazel test --test_output=errors //... || [ $? -eq 4 ]' ) >"$logdir/$slug.log" 2>&1; then
+            if ( cd "$ws/$1" && bazel --output_base="$outbasedir/$slug" test --test_output=errors //... || [ $? -eq 4 ] ) >"$logdir/$slug.log" 2>&1; then
               echo 0 >"$logdir/$slug.status"
             else
               echo 1 >"$logdir/$slug.status"
             fi
           }
           # Windows runners fail when the first Bazel servers start at once:
-          # they race creating the shared base directory (error 183). Start
-          # each folder's server serially first; the waves below then attach
-          # to the running servers.
+          # they race creating the shared base directory (error 183). Each
+          # folder has its own server directory now, but still start them
+          # serially here; the waves below then attach to running servers.
           if [ "$RUNNER_OS" = "Windows" ]; then
             while IFS= read -r folder; do
               [ -z "$folder" ] && continue
-              ( cd "$ws/$folder" && bazel version ) >/dev/null 2>&1 || true
+              slug="$(printf '%s' "$folder" | tr '/.' '_')"
+              ( cd "$ws/$folder" && bazel --output_base="$outbasedir/$slug" version ) >/dev/null 2>&1 || true
             done <<< "$FOLDERS"
           fi
           running=0
