@@ -91,7 +91,7 @@ jobs:
             cache: test-windows-1
             # The root workspace alone: with other folders running beside it
             # on the same runner its 19k actions take 3x longer, which sets
-            # the whole run's wall time. Alone it finishes in ~4 minutes.
+            # the whole run's wall time. Alone it only competes with itself.
             folders: |
               .
           - os: windows-latest
@@ -150,7 +150,13 @@ jobs:
           external-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
           repository-cache: ${{ github.event_name != 'schedule' && !inputs.uncached }}
           cache-save: ${{ github.event_name != 'schedule' && !inputs.uncached }}
-          cache-version: "1"
+          # Rotates every cache key below (disk, repository, external,
+          # bazelisk). setup-bazel skips the post-job save for any cache whose
+          # key restored with an exact hit, so a key saved by a failed or
+          # partial run stays stale forever and every later run misses against
+          # it. Bump this after a sharding change or a poisoned key; the next
+          # run is cold once, then its post-job saves write complete entries.
+          cache-version: "2"
           bazelrc: |
             common --announce_rc
             common --color=yes
