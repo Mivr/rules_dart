@@ -110,6 +110,14 @@ Future<List<String>> check(String message) async {
     }
   }
 
+  problems.addAll(checkEntries(entries));
+  return problems;
+}
+
+/// Returns the problems with the non-`skip` Changelog [entries], in entry
+/// order; empty when every entry is fine.
+List<String> checkEntries(List<String> entries) {
+  final problems = <String>[];
   for (final entry in entries) {
     if (entry == 'skip') continue;
     if (entry.length > _maxEntryLength) {
