@@ -23,6 +23,11 @@ final _anyChangelogLine = RegExp(
   multiLine: true,
 );
 
+// Shell-quoting artifacts that leak through when a message is passed through a
+// shell instead of being written literally.
+const _shellQuoteArtifact1 = "'\\''"; // ' \ ' '
+const _shellQuoteArtifact2 = "'" + '"' + "'" + '"' + "'";
+
 final _repo =
     Platform.environment['BUILD_WORKSPACE_DIRECTORY'] ?? Directory.current.path;
 
@@ -110,6 +115,15 @@ Future<List<String>> check(String message) async {
     }
   }
 
+  problems.addAll(checkChangelogEntries(entries));
+  return problems;
+}
+
+/// Pure per-entry rules for `Changelog:` entries. [entries] are the trailer
+/// values (already trimmed); `skip` is exempt. Returns the problem messages.
+List<String> checkChangelogEntries(List<String> entries) {
+  final problems = <String>[];
+  final seen = <String>{};
   for (final entry in entries) {
     if (entry == 'skip') continue;
     if (entry.length > _maxEntryLength) {
@@ -123,8 +137,36 @@ Future<List<String>> check(String message) async {
         'Changelog entry must start with a capital letter or `code`: $entry',
       );
     }
+    if (_hasShellQuoteArtifact(entry)) {
+      problems.add('Changelog entry contains a shell-quoting artifact: $entry');
+    }
+    final backticks = '`'.allMatches(entry).length;
+    if (backticks.isOdd) {
+      problems.add('Changelog entry has unbalanced backticks: $entry');
+    }
+    if (seen.contains(entry)) {
+      problems.add('Changelog entry is a duplicate: $entry');
+    }
+    seen.add(entry);
   }
   return problems;
+}
+
+/// Backwards-friendly aliases for the pure per-entry rule function.
+List<String> checkEntries(List<String> entries) =>
+    checkChangelogEntries(entries);
+List<String> validateChangelogEntries(List<String> entries) =>
+    checkChangelogEntries(entries);
+
+bool _hasShellQuoteArtifact(String entry) {
+  if (entry.contains(_shellQuoteArtifact1)) return true;
+  if (entry.contains(_shellQuoteArtifact2)) return true;
+  for (var i = 0; i + 1 < entry.length; i++) {
+    final c = entry.codeUnitAt(i);
+    final next = entry.codeUnitAt(i + 1);
+    if (c == 0x5C && (next == 0x27 || next == 0x22)) return true;
+  }
+  return false;
 }
 
 /// Runs git in the repo; [stdin] is piped in for the subcommands that read the
