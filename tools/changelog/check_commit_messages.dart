@@ -17,6 +17,7 @@ final _conventional = RegExp(
 final _userVisibleType = RegExp(r'^(feat|fix|perf)[(!:]');
 final _exempt = RegExp(r'^(fixup!|squash!|amend!|Merge |Revert ")');
 final _entryStart = RegExp(r'^[A-Z`]');
+final _shellBackslashQuote = RegExp(r'''\\['"]''');
 final _anyChangelogLine = RegExp(
   r'^changelog:',
   caseSensitive: false,
@@ -110,6 +111,20 @@ Future<List<String>> check(String message) async {
     }
   }
 
+  for (final entry in checkEntries(entries)) {
+    problems.add(entry);
+  }
+  return problems;
+}
+
+/// The per-entry `Changelog:` rules (length, trailing period, start
+/// character, shell-quoting artifacts, unbalanced backticks, duplicates).
+///
+/// Pure: takes the parsed trailer entries and returns the violations, so
+/// tests can call it without git.
+List<String> checkEntries(List<String> entries) {
+  final problems = <String>[];
+  final seen = <String>{};
   for (final entry in entries) {
     if (entry == 'skip') continue;
     if (entry.length > _maxEntryLength) {
@@ -123,8 +138,27 @@ Future<List<String>> check(String message) async {
         'Changelog entry must start with a capital letter or `code`: $entry',
       );
     }
+    if (_hasShellQuotingArtifact(entry)) {
+      problems.add('Changelog entry contains a shell-quoting artifact: $entry');
+    }
+    if ('`'.allMatches(entry).length.isOdd) {
+      problems.add('Changelog entry has unbalanced backticks: $entry');
+    }
+    if (!seen.add(entry)) {
+      problems.add('Changelog entry is duplicated: $entry');
+    }
   }
   return problems;
+}
+
+/// A shell-quoting artifact left in the entry: the `'\''` and `'"'"'`
+/// sequences, or a backslash directly followed by a quote character.
+/// Plain apostrophes (`Don't`, `caller's`) are not artifacts.
+bool _hasShellQuotingArtifact(String entry) {
+  if (entry.contains(r"'\''")) return true;
+  if (entry.contains('\'"\'"\'')) return true;
+  if (_shellBackslashQuote.hasMatch(entry)) return true;
+  return false;
 }
 
 /// Runs git in the repo; [stdin] is piped in for the subcommands that read the
