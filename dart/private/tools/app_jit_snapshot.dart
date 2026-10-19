@@ -978,10 +978,13 @@ void _copyEntitySync(String srcPath, String dstPath) {
             .substring(srcPath.length)
             .replaceAll(r'\', '/')
             .replaceFirst(RegExp(r'^/+'), '');
-        final childDst = File('$dstPath/$rel');
-        if (childDst.existsSync()) continue;
-        childDst.parent.createSync(recursive: true);
-        childDst.writeAsBytesSync(entity.readAsBytesSync());
+        final childDst = '$dstPath/$rel';
+        if (FileSystemEntity.typeSync(childDst) !=
+            FileSystemEntityType.notFound) {
+          continue;
+        }
+        File(childDst).parent.createSync(recursive: true);
+        File(childDst).writeAsBytesSync(File(entity.path).readAsBytesSync());
       }
     }
   }
@@ -1060,13 +1063,65 @@ void _runGenKernel(List<String> argv) {
     rawGenArgs.add(arg);
   }
 
-  if (rawGenArgs.isNotEmpty) {
+  // Only patch the gen_kernel snapshot when a define actually contains a comma:
+  // the patch disables Parser._setOption's comma splitting, which is only
+  // needed for comma-containing defines.
+  var hasCommaDefines = false;
+  for (var i = 0; i < rawGenArgs.length; i++) {
+    final arg = rawGenArgs[i];
+    if (arg == '-D' || arg == '--define') {
+      if (i + 1 < rawGenArgs.length && rawGenArgs[i + 1].contains(',')) {
+        hasCommaDefines = true;
+      }
+    } else if (arg.startsWith('-D') && arg.length > 2) {
+      if (arg.substring(2).contains(',')) hasCommaDefines = true;
+    } else if (arg.startsWith('--define=')) {
+      if (arg.substring('--define='.length).contains(',')) {
+        hasCommaDefines = true;
+      }
+    }
+  }
+  if (rawGenArgs.isNotEmpty && hasCommaDefines) {
     rawGenArgs[0] = patchSnapshotSplitCommas(rawGenArgs[0]);
+  }
+
+  // Only stage an isolated multi-root when an undeclared file would otherwise
+  // shadow a declared input. In the common case (no shadows) skip staging.
+  var hasShadowRisk = false;
+  if (declaredInputSources.isNotEmpty && fsRoots.isNotEmpty) {
+    for (final srcPath in declaredInputSources) {
+      final key = _stripFsRootPrefix(srcPath, fsRoots);
+      if (key.isEmpty) {
+        hasShadowRisk = true;
+        break;
+      }
+      final slashSrc = srcPath.replaceAll(r'\\', '/');
+      var originFound = false;
+      for (final root in fsRoots) {
+        final slashRoot = root
+            .replaceAll(r'\\', '/')
+            .replaceFirst(RegExp(r'/+$'), '');
+        if (slashSrc.startsWith('$slashRoot/')) {
+          originFound = true;
+          continue;
+        }
+        final candidate = slashRoot == '.' ? key : '$slashRoot/$key';
+        if (File(candidate).existsSync()) {
+          hasShadowRisk = true;
+          break;
+        }
+      }
+      if (hasShadowRisk) break;
+      if (!originFound) {
+        hasShadowRisk = true;
+        break;
+      }
+    }
   }
 
   Directory? isolatedRootDir;
   final forwarded = <String>[];
-  if (declaredInputSources.isNotEmpty && fsRoots.isNotEmpty) {
+  if (declaredInputSources.isNotEmpty && fsRoots.isNotEmpty && hasShadowRisk) {
     final baseDir = outputPath != null
         ? File(outputPath).parent
         : Directory.systemTemp;

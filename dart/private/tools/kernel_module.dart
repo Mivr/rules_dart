@@ -2423,15 +2423,36 @@ Future<bool> _needsIsolatedMultiRoot(
   _Files files,
   Set<String> vm,
 ) async {
-  if (compiler is _OneShot ||
-      compiler is _Persistent ||
-      multiRoots.length > 1) {
-    return true;
-  }
   final candidateRoots = <String>{
     ...(multiRoots.isEmpty ? const ['.'] : multiRoots),
     ...extraMultiRoots,
   };
+  // Staging can be skipped only when every declared input already lives under
+  // one of the declared roots (so the front end can resolve it without a
+  // staged copy) and no undeclared file shadows it. Persistent workers still
+  // get per-request isolation whenever staging is needed.
+  for (final key in files.declaredKeys) {
+    final origin = files.declaredOriginOf(key);
+    if (origin == null) return true;
+    final originNorm = origin.replaceAll(r'\\', '/');
+    var underRoot = false;
+    for (final root in candidateRoots) {
+      final slashRoot = root
+          .replaceAll(r'\\', '/')
+          .replaceFirst(RegExp(r'/+$'), '');
+      final prefix = slashRoot == '.' ? '' : '$slashRoot/';
+      if (slashRoot == '.' && !originNorm.startsWith('/')) {
+        // relative origin under cwd root
+        underRoot = true;
+        break;
+      }
+      if (prefix.isNotEmpty && originNorm.startsWith(prefix)) {
+        underRoot = true;
+        break;
+      }
+    }
+    if (!underRoot) return true;
+  }
   final checkKeys = <String>{...keys, ...files.declaredKeys};
   for (final key in checkKeys) {
     final declaredRoot = files.declaredRootOf(key);
