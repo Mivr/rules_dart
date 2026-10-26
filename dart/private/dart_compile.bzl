@@ -487,10 +487,21 @@ def cross_target_error(target_os, target_arch):
     return None
 
 def _compile_validate(ctx, cfg):
-    """Fails on invalid cross targets, late defines, unrecordable modes, and tool mismatches."""
+    """Fails on invalid cross targets, cross jit-snapshot, late defines, unrecordable modes, and tool mismatches."""
     cross_err = cross_target_error(cfg.target_os, cfg.target_arch)
     if cross_err != None:
         fail(cross_err)
+    if cfg.compile_mode == "jit-snapshot" and (cfg.target_os or cfg.target_arch):
+        fail(
+            ("dart_compile_action: target %s requested cross-compilation target " +
+             "(%s, %s) with `compile_mode = \"jit-snapshot\"`; jit-snapshot is " +
+             "host-only because it trains on the build machine's Dart VM and has " +
+             "no target OS/CPU flags; use `exe` or `aot-snapshot` to cross-compile.") % (
+                ctx.label,
+                cfg.target_os,
+                cfg.target_arch,
+            ),
+        )
     stage_err = defines_stage_error(cfg.defines, cfg.package_config)
     if stage_err != None:
         fail(stage_err)

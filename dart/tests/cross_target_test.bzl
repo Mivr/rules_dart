@@ -234,3 +234,43 @@ def _make_abi_manifest_test(platform_name):
 riscv64_abi_test = _make_abi_manifest_test("linux_riscv64")
 
 armv7_abi_test = _make_abi_manifest_test("linux_arm")
+
+def _cross_jit_refusal_test_impl(ctx):
+    """Asserts that cross-compiling jit-snapshot fails analysis naming target and reason."""
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    asserts.expect_failure(env, str(target.label))
+    asserts.expect_failure(
+        env,
+        "jit-snapshot is host-only because it trains on the build machine's Dart VM and has no target OS/CPU flags; use `exe` or `aot-snapshot` to cross-compile",
+    )
+    return analysistest.end(env)
+
+def _make_cross_jit_refusal_test(platform_name):
+    """Creates an expect_failure analysis test for jit-snapshot on `platform_name`."""
+    return analysistest.make(
+        _cross_jit_refusal_test_impl,
+        expect_failure = True,
+        config_settings = {
+            "//command_line_option:platforms": [_platform_label(platform_name)],
+        },
+    )
+
+riscv64_jit_refusal_test = _make_cross_jit_refusal_test("linux_riscv64")
+armv7_jit_refusal_test = _make_cross_jit_refusal_test("linux_arm")
+arm64_jit_refusal_test = _make_cross_jit_refusal_test("linux_arm64")
+x64_jit_refusal_test = _make_cross_jit_refusal_test("linux_x64")
+
+def _native_jit_success_test_impl(ctx):
+    """Asserts that native jit-snapshot analysis produces actions without failure."""
+    env = analysistest.begin(ctx)
+    actions = [a.mnemonic for a in analysistest.target_actions(env)]
+    asserts.true(env, len(actions) > 0, "expected actions for native jit-snapshot")
+    return analysistest.end(env)
+
+x64_native_jit_success_test = analysistest.make(
+    _native_jit_success_test_impl,
+    config_settings = {
+        "//command_line_option:platforms": [_platform_label("linux_x64")],
+    },
+)

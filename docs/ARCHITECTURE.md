@@ -118,7 +118,7 @@ bazel build //:my_binary --platforms=//:linux_x64
 
 ### Limitations
 
-- Only `exe` and `aot-snapshot` compile modes support cross-compilation. `kernel` and `jit-snapshot` are VM formats and ignore target flags.
+- Only `exe` and `aot-snapshot` compile modes support cross-compilation. `jit-snapshot` is host-only (refused under cross `--platforms`). `kernel` is a VM format and ignores target flags.
 - `dart_js_binary` and `dart_wasm_binary` output is platform-independent — no cross-compilation needed.
 - `dart_test` runs on the host — cross-compiled tests are not supported.
 - Native **code assets** on linux-riscv64 and linux-arm work only if you supply a cc toolchain for that CPU; rules_dart ships none. The ABI mapping is in place (`linux_riscv64`, `linux_arm`), so rules_dart itself will not block you — an unresolvable cc toolchain surfaces as Bazel's own error.

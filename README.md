@@ -727,8 +727,9 @@ The [`e2e/`](e2e/) directory contains complete working examples:
 | [`link_hook`](e2e/link_hook/)                         | `record_use` and a package's `hook/link.dart` emitting a data asset via `dart_link_hook` |
 
 > **Note**: Only the `exe` and `aot-snapshot` compile modes cross-compile via
-> `--platforms`. `kernel` and `jit-snapshot` are VM formats that ignore target
-> flags, and `dart_test` always runs on the host. Linux targets are `linux-x64`,
+> `--platforms`. `jit-snapshot` is host-only (refused under cross `--platforms`).
+> `kernel` is a VM format that ignores target flags, and `dart_test` always runs
+> on the host. Linux targets are `linux-x64`,
 > `linux-arm64`, `linux-riscv64` and `linux-arm` (armv7, selected by
 > `@platforms//cpu:armv7`), reachable from every supported host. Cross-compiling
 > fetches SDK artifacts at action time, so it needs network access. See
