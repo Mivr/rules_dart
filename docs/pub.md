@@ -1,3 +1,45 @@
+# Runtime package files
+
+A pub package is more than its `lib/`: `pubspec.yaml`, `LICENSE`, a `hook/`
+script, an asset directory a pubspec declares. Every generated spoke puts
+those on its `dart_library`'s `data`, so they reach the runfiles of every
+`dart_binary`/`dart_test` that depends on the package — a consumer that walks
+a dependency's package root, like Flutter's plugin discovery, finds them
+without a downstream patch. The same files are in
+`DartInfo.transitive_package_files`, beside the per-package
+`DartInfo.package_files` record that names each package's root. They never
+join `DefaultInfo.files`, `DartInfo.transitive_resources`, or an action, so
+analysis and compilation are byte-identical to a build without them.
+
+`pub.from_lock()` and `pub.package()` take `package_files` as a trailing
+`string_list`:
+
+```starlark
+pub.from_lock(
+    name = "pub_deps",
+    lock = "//:pubspec.lock",
+    # The default. It never matches lib/**, BUILD* or WORKSPACE*.
+    package_files = ["pubspec.yaml", "LICENSE*"],
+)
+```
+
+The default is deliberately small. Globbing every non-`lib/` directory
+(`test/`, `example/`, `doc/`, `tool/`) across hundreds of spokes multiplies
+every test's runfiles tree, so that is opt-in: pass a broader glob such as
+`package_files = ["assets/**"]`. Pass `package_files = []` to opt out for a
+package whose non-`lib/` files must stay out of the graph. The generated glob
+always excludes `lib/**`, `BUILD*` and `WORKSPACE*`, and a `.dart` file in a
+hand-written `dart_library`'s `data` is refused at analysis. rules_flutter's
+`flutter.pub` keeps its own asset, font and shader targets; `package_files`
+does not duplicate them.
+
+The default's cost is one file per spoke, plus a `LICENSE` where the package
+ships one. This module's own `ext_pub_deps` materialises 92 package
+repositories, so a test that depends on them all gains about two runfiles
+entries per spoke — under two hundred files — rather than the thousands a
+`glob(["**"])` over `test/`, `example/`, `doc/` and `tool/` would add. That is
+why the broad glob is opt-in, never the default.
+
 # `pub` root-wins precedence
 
 One version per package stays the rule, and the root module picks it. A

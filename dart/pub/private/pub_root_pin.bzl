@@ -228,7 +228,7 @@ def decls_by_name(package_tags):
 
     Args:
       package_tags: The `package` tags, each with `(name, version, sha256,
-        deps)` and optionally `(is_root, module)`.
+        deps, package_files)` and optionally `(is_root, module)`.
 
     Returns:
       Dict of package name to that package's declaration structs in tag
@@ -243,6 +243,7 @@ def decls_by_name(package_tags):
             version = tag.version,
             sha256 = tag.sha256,
             deps = tag.deps,
+            package_files = getattr(tag, "package_files", ["pubspec.yaml", "LICENSE*"]),
         ))
     return by_name
 
@@ -601,6 +602,7 @@ def _checked_decls(decls):
         version = decl.version,
         sha256 = decl.sha256.strip(),
         deps = decl.deps,
+        package_files = getattr(decl, "package_files", ["pubspec.yaml", "LICENSE*"]),
     ) for decl in decls]
     return clean, None, ""
 
@@ -621,7 +623,7 @@ def _select_with_root_decl(name, root_decl, dep_decls, root_entries, all_hosted)
     if err:
         return struct(selected = None, alias = None, note = None, error = err, error_shape = "conflict")
     return struct(
-        selected = struct(version = root_decl.version, sha256 = root_decl.sha256, deps = root_decl.deps, source = pin.source),
+        selected = struct(version = root_decl.version, sha256 = root_decl.sha256, deps = root_decl.deps, package_files = root_decl.package_files, source = pin.source),
         alias = None,
         note = note,
         error = None,
@@ -681,8 +683,9 @@ def select_all_explicit(package_tags, lock_tags):
 
     Returns:
       `(explicit, aliases, notes, error, error_shape)`: `explicit` maps
-      package name to the winning `(name, version, sha256, deps)` struct, a
-      repository the extension generates under the package name;
+      package name to the winning `(name, version, sha256, deps,
+      package_files)` struct, a repository the extension generates under the
+      package name;
       `aliases` maps package name to `(version, sha256, source)` for names
       a root hosted lock pin resolves while declarations exist, or to
       `(version, resolved_ref, path, source)` for names a root git lock pin
@@ -720,6 +723,7 @@ def select_all_explicit(package_tags, lock_tags):
                 version = sel.selected.version,
                 sha256 = sel.selected.sha256,
                 deps = sel.selected.deps,
+                package_files = sel.selected.package_files,
             )
         elif sel.alias != None:
             aliases[name] = sel.alias
@@ -740,7 +744,8 @@ def select_pub_package(name, decls, root_entries, root_git_entries = [], all_hos
     Args:
       name: The package name.
       decls: Every `pub.package()` tag for the package, each with
-        `(is_root, module, name, version, sha256, deps)`, in any order.
+        `(is_root, module, name, version, sha256, deps, package_files)`, in
+        any order.
       root_entries: The root's non-isolated hosted lock entries for the
         package (see `root_hosted_lock_entries`), in any order.
       root_git_entries: The root's non-isolated git lock entries for the
@@ -753,8 +758,9 @@ def select_pub_package(name, decls, root_entries, root_git_entries = [], all_hos
 
     Returns:
       `struct(selected, alias, note, error, error_shape)`: `selected` is the
-      winning declaration `(version, sha256, deps, source)` or None when no
-      `pub.package()` applies (the locks resolve the package); `alias` is
+      winning declaration `(version, sha256, deps, package_files, source)` or
+      None when no `pub.package()` applies (the locks resolve the package);
+      `alias` is
       `(version, sha256, source)` for a hosted pin, or `(version,
       resolved_ref, path, source)` for a git pin, when declarations exist
       but a root lock pin resolves the package, telling the caller to
@@ -790,7 +796,7 @@ def select_pub_package(name, decls, root_entries, root_git_entries = [], all_hos
     if winner == None:
         return struct(selected = None, alias = None, note = None, error = None, error_shape = "")
     return struct(
-        selected = struct(version = winner.version, sha256 = winner.sha256, deps = winner.deps, source = "pub.package() from module \"%s\"" % winner.module),
+        selected = struct(version = winner.version, sha256 = winner.sha256, deps = winner.deps, package_files = winner.package_files, source = "pub.package() from module \"%s\"" % winner.module),
         alias = None,
         note = None,
         error = None,

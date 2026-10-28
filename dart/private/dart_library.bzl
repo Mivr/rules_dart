@@ -109,6 +109,33 @@ def check_files_under_lib_root(label, lib_root, files, attr_name = "srcs"):
             )
     return None
 
+def check_no_dart_in_data(label, files):
+    """Refuses a `.dart` file in `data`.
+
+    `data` is the runfiles-only attribute: its files reach a binary or test at
+    run time and are never compile inputs. A `.dart` file there would be
+    shipped but not compiled, so an import of it would still fail while the
+    file sat in runfiles. `resources` refuses the same shape for the same
+    reason, and the message names the attribute so the reader knows which list
+    to move the file out of.
+
+    Args:
+      label: The owning rule's label (included in the error message).
+      files: The files listed in `data`.
+
+    Returns:
+      An error message string for the first offending file, or `None`.
+    """
+    for f in files:
+        if f.extension == "dart":
+            return (
+                ("%s: `%s` is a Dart source in `data`. `data` names files that " +
+                 "ride runfiles and never enter an action; a `.dart` file " +
+                 "listed there would ship at run time but never compile. Move " +
+                 "it to `srcs`.") % (label, f.short_path)
+            )
+    return None
+
 def link_hook_error(label, lib_root, link_hook):
     """Checks that a `link_hook` is the package's `hook/link.dart`.
 
@@ -193,6 +220,37 @@ def _own_kernel_providers(ctx, info):
         return []
     return [kernel_info]
 
+def _member_package_inputs(member):
+    """Splits one member's declared files into sources, resources and data.
+
+    A member keeps only its `DartPackageInfo`, so its runtime files are
+    recovered from `DefaultInfo.runfiles` — which also carries its sources and
+    `lib/` resources. Subtracting the member's `DefaultInfo.files` leaves
+    exactly the `data` half, and the record supplies the package identity the
+    merged library's `DartInfo.package_files` entry needs.
+
+    Args:
+      member: A `dart_package_member` target.
+
+    Returns:
+      A struct with `record`, `srcs`, `resources` and `package_files`.
+    """
+    member_files = member[DefaultInfo].files.to_list()
+    in_member_files = {f: True for f in member_files}
+    return struct(
+        record = member[DartPackageInfo],
+        srcs = [f for f in member_files if f.extension == "dart"],
+        resources = [f for f in member_files if f.extension != "dart"],
+        package_files = sorted(
+            [
+                f
+                for f in member[DefaultInfo].default_runfiles.files.to_list()
+                if f not in in_member_files
+            ],
+            key = lambda f: f.short_path,
+        ),
+    )
+
 def _multi_package_library_impl(ctx):
     """Implements `dart_library` for a library merged over several packages.
 
@@ -211,15 +269,37 @@ def _multi_package_library_impl(ctx):
                   "library takes its sources and every per-package fact from " +
                   "its `members`; set them there.") % (ctx.label, attr_name))
 
-    records = [member[DartPackageInfo] for member in ctx.attr.members]
+    own_data = ctx.files.data
+    err = check_no_dart_in_data(ctx.label, own_data)
+    if err != None:
+        fail(err)
+
+    records = []
     own_srcs = []
     own_resources = []
+    package_file_records = []
     for member in ctx.attr.members:
-        for f in member[DefaultInfo].files.to_list():
-            if f.extension == "dart":
-                own_srcs.append(f)
-            else:
-                own_resources.append(f)
+        inputs = _member_package_inputs(member)
+        records.append(inputs.record)
+        own_srcs.extend(inputs.srcs)
+        own_resources.extend(inputs.resources)
+        if inputs.package_files:
+            package_file_records.append(struct(
+                package_name = inputs.record.package_name,
+                lib_root = inputs.record.lib_root,
+                files = tuple(inputs.package_files),
+            ))
+
+    # A merged target can carry `data` of its own, but it owns no single
+    # package to name it after. The empty identity keeps the files in
+    # `transitive_package_files` (and therefore in every consumer's runfiles)
+    # without inventing a package record that no member backs.
+    if own_data:
+        package_file_records.append(struct(
+            package_name = "",
+            lib_root = "",
+            files = tuple(own_data),
+        ))
 
     info = dart_info_multi(
         label = ctx.label,
@@ -227,40 +307,37 @@ def _multi_package_library_impl(ctx):
         deps = ctx.attr.deps,
         srcs = own_srcs,
         resources = own_resources,
+        package_files = package_file_records,
     )
     kernel_providers = _own_kernel_providers(ctx, info)
 
     return [
         DefaultInfo(
             files = depset(own_srcs + own_resources),
-            runfiles = ctx.runfiles(files = own_srcs + own_resources),
+            runfiles = ctx.runfiles(
+                files = own_srcs + own_resources + own_data,
+            ).merge_all([
+                member[DefaultInfo].default_runfiles
+                for member in ctx.attr.members
+            ]),
         ),
         info,
     ] + kernel_providers
 
-def _dart_library_impl(ctx):
-    if ctx.attr.members:
-        return _multi_package_library_impl(ctx)
+def _library_own_sources(ctx):
+    """Resolves one library's sources, `lib/` resources and runtime files.
 
-    identity = resolve_package_identity(ctx)
-    package_name = derive_package_name(
-        identity.package_name,
-        ctx.label.package,
-        ctx.label.name,
-    )
+    Every attribute rule about a single-package `dart_library` lives here: the
+    `srcs`/`srcs_dir` split, the duplicate-path checks, the `lib/`-root check,
+    and the refusals of Dart files in `resources` and `data`. The caller only
+    has to hold the result.
 
-    # The one point a generated source and the library collecting it meet.
-    err = codegen_identity_error(
-        ctx.label,
-        ctx.attr.srcs,
-        struct(
-            package_name = package_name,
-            language_version = identity.language_version,
-        ),
-    )
-    if err != None:
-        fail(err)
+    Args:
+      ctx: The `dart_library` rule context.
 
+    Returns:
+      A struct with `own_srcs`, `own_resources`, `lib_root` and `own_data`.
+    """
     own_resources = ctx.files.resources
     for f in own_resources:
         if f.extension == "dart":
@@ -270,6 +347,11 @@ def _dart_library_impl(ctx):
                  "there would be staged for the analyzer and withheld from " +
                  "the compile. Move it to `srcs`.") % (ctx.label, f.short_path),
             )
+
+    own_data = ctx.files.data
+    err = check_no_dart_in_data(ctx.label, own_data)
+    if err != None:
+        fail(err)
 
     if ctx.attr.srcs_dir:
         # Sources arrive pre-assembled as one directory (a `dart_source_set`);
@@ -306,7 +388,39 @@ def _dart_library_impl(ctx):
         if err != None:
             fail(err)
 
-    err = link_hook_error(ctx.label, lib_root, ctx.file.link_hook)
+    return struct(
+        own_srcs = own_srcs,
+        own_resources = own_resources,
+        lib_root = lib_root,
+        own_data = own_data,
+    )
+
+def _dart_library_impl(ctx):
+    if ctx.attr.members:
+        return _multi_package_library_impl(ctx)
+
+    identity = resolve_package_identity(ctx)
+    package_name = derive_package_name(
+        identity.package_name,
+        ctx.label.package,
+        ctx.label.name,
+    )
+
+    # The one point a generated source and the library collecting it meet.
+    err = codegen_identity_error(
+        ctx.label,
+        ctx.attr.srcs,
+        struct(
+            package_name = package_name,
+            language_version = identity.language_version,
+        ),
+    )
+    if err != None:
+        fail(err)
+
+    own = _library_own_sources(ctx)
+
+    err = link_hook_error(ctx.label, own.lib_root, ctx.file.link_hook)
     if err != None:
         fail(err)
 
@@ -314,13 +428,14 @@ def _dart_library_impl(ctx):
         label = ctx.label,
         package = dart_package_identity(
             package_name = package_name,
-            lib_root = lib_root,
+            lib_root = own.lib_root,
             language_version = identity.language_version,
             version = ctx.attr.version,
+            package_files = own.own_data,
         ),
         deps = ctx.attr.deps,
-        srcs = own_srcs,
-        resources = own_resources,
+        srcs = own.own_srcs,
+        resources = own.own_resources,
         code_assets = ctx.attr.code_assets,
         has_unreplaced_hook = ctx.attr.has_unreplaced_hook,
         link_hook = ctx.file.link_hook,
@@ -331,10 +446,16 @@ def _dart_library_impl(ctx):
     # package's split-across-targets / source+generated files into one real
     # directory happens in the *consumer* (`dart_binary`/`dart_test`), which is
     # the only place that sees the package's complete file set.
+    #
+    # `data` rides runfiles only: `files` stays the library's sources and
+    # `lib/` resources, so a `filegroup` or `ctx.files.deps` consumer never
+    # mistakes a runtime file for something to compile or analyze.
     return [
         DefaultInfo(
-            files = depset(own_srcs + own_resources),
-            runfiles = ctx.runfiles(files = own_srcs + own_resources),
+            files = depset(own.own_srcs + own.own_resources),
+            runfiles = ctx.runfiles(
+                files = own.own_srcs + own.own_resources + own.own_data,
+            ),
         ),
         info,
     ] + _own_kernel_providers(ctx, info)
@@ -361,6 +482,17 @@ and ride the runfiles of every `dart_binary`/`dart_test` that depends on this li
 pub, where the package directory exists whole on disk at run time. They are never compile inputs. \
 `.dart` files belong in `srcs`; files outside `lib/` have no `package:` URI and belong in a \
 consumer's `data`.""",
+            allow_files = True,
+        ),
+        "data": attr.label_list(
+            doc = """Files this package ships outside `lib/` that a program reads at run time \
+or a tool finds by walking the package root: `pubspec.yaml`, `LICENSE`, a `hook/` script, an \
+asset directory a pubspec declares. They ride `DefaultInfo.runfiles` of this library and of every \
+`dart_binary`/`dart_test` that reaches it through `deps`, and `DartInfo.transitive_package_files` \
+carries their closure. They are never in `DefaultInfo.files`, never in `DartInfo.transitive_resources`, \
+and never in any action's inputs, so a package that ships one compiles, analyzes and generates \
+byte-identically to one that does not. `.dart` files belong in `srcs`; files under `lib/` that are \
+not compiled belong in `resources`.""",
             allow_files = True,
         ),
         "srcs_dir": attr.label(

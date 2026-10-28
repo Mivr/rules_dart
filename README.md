@@ -80,6 +80,27 @@ dart_test(
 )
 ```
 
+A library also ships the files its package needs at run time but never compiles
+with `data`:
+
+```starlark
+dart_library(
+    name = "greeter",
+    srcs = glob(["lib/**/*.dart"]),
+    data = ["pubspec.yaml", "LICENSE"],
+)
+```
+
+Those files ride `DefaultInfo.runfiles`, and transitively the runfiles of every
+`dart_binary`/`dart_test` that depends on the library, so a program can read
+them through `package:runfiles` or by walking a dependency's package root. They
+are never in `DefaultInfo.files`, never in `DartInfo.transitive_resources`, and
+never in an action's inputs, so shipping one does not recompile or re-analyze
+anything. `DartInfo.transitive_package_files` carries their closure for a
+consumer that would rather not walk runfiles. A `.dart` file in `data` is
+refused at analysis: it belongs in `srcs`. Non-Dart files under `lib/` belong
+in `resources`, which is the analyzer-visible half of the package.
+
 ### Tests
 
 A `dart_test` whose `deps` include `package:test` runs under `package:test`'s
@@ -188,6 +209,29 @@ dart_binary(
     ],
 )
 ```
+
+Each generated spoke also stages the package's non-`lib/` runtime files, so a
+consumer that scans a dependency's package root — Flutter's plugin discovery
+reading `pubspec.yaml`, say — finds it. `package_files` controls the glob on
+both `pub.from_lock()` and `pub.package()`:
+
+```starlark
+pub.from_lock(
+    name = "pub_deps",
+    lock = "//:pubspec.lock",
+    # The default, stated explicitly. It never matches lib/**, BUILD* or
+    # WORKSPACE*.
+    package_files = ["pubspec.yaml", "LICENSE*"],
+)
+```
+
+The default is deliberately small: every pattern multiplies every dependent
+test's runfiles tree across all pub spokes. Pass a broader glob
+(`package_files = ["assets/**"]`) to opt in to more files, or
+`package_files = []` to opt out entirely. Pubspec-declared asset, font and
+shader directories outside `lib/` already reach a Flutter build through
+rules_flutter's own asset targets; `package_files` is not a second mechanism
+for those.
 
 > **Note**: `pub.from_lock()` resolves **hosted** packages (i.e. packages
 > from a pub registry such as pub.dev) and **git** packages. Packages with

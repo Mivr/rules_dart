@@ -4,7 +4,7 @@ load("//dart/private:download.bzl", "pinned_download")
 load("//dart/pub:pinned_sources.bzl", "pinned_source_error")
 load("//dart/pub:pub_scan.bzl", "run_pub_archive_scan")
 load("//dart/pub:yaml_parser.bzl", "parse_pubspec_sdk_constraint", "pubspec_sdk_constraint_error")
-load("//dart/pub/private:build_content.bzl", "make_dart_library_build_content")
+load("//dart/pub/private:build_content.bzl", "PACKAGE_FILES_ATTR_DOC", "make_dart_library_build_content")
 load("//dart/pub/private:language_version.bzl", "derive_language_version")
 load("//dart/pub/private:pub_symlink.bzl", "check_package_symlinks")
 
@@ -76,6 +76,7 @@ def _pub_package_impl(ctx):
         version = ctx.attr.version,
         # A link hook is runnable by `dart_link_hook`, so it is recorded.
         link_hook = "hook/link.dart" if ctx.path("hook/link.dart").exists else "",
+        package_files = ctx.attr.package_files,
     )
 
     ctx.file("BUILD.bazel", build_content)
@@ -98,6 +99,10 @@ pub_package = repository_rule(
         "deps": attr.string_list(
             doc = "Repository names of pub packages this package depends on.",
             default = [],
+        ),
+        "package_files": attr.string_list(
+            doc = PACKAGE_FILES_ATTR_DOC,
+            default = ["pubspec.yaml", "LICENSE*"],
         ),
     },
     doc = "Downloads a pub.dev package and generates a dart_library BUILD target.",

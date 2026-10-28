@@ -160,8 +160,8 @@ def dart_info(
     Args:
       label: The constructing rule's label, for error messages.
       package: The struct from `dart_package_identity()`: the package name,
-        `lib/` root, language version, and resolved version this target
-        provides.
+        `lib/` root, language version, resolved version this target provides,
+        and its runtime `package_files` (its `data` files).
       deps: Targets providing `DartInfo` whose closures are merged in.
       srcs: This target's own Dart sources (or its source directory).
       resources: This target's own non-Dart files under `lib/`.
@@ -179,6 +179,7 @@ def dart_info(
         fail(err)
 
     dep_infos = [dep[DartInfo] for dep in deps]
+    own_package_files = tuple(getattr(package, "package_files", ()))
 
     this_pkg = DartPackageInfo(
         package_name = package.package_name,
@@ -202,6 +203,13 @@ def dart_info(
             for a in own_assets
             if a.dynamic_library != None
         ],
+        package_file_records = [
+            struct(
+                package_name = package.package_name,
+                lib_root = package.lib_root,
+                files = own_package_files,
+            ),
+        ] if own_package_files else [],
     )
 
 def dart_info_no_package(deps = []):
@@ -239,9 +247,10 @@ def dart_info_no_package(deps = []):
         resources = [],
         packages = [],
         code_asset_files = [],
+        package_file_records = [],
     )
 
-def dart_info_multi(label, records, deps = [], srcs = [], resources = []):
+def dart_info_multi(label, records, deps = [], srcs = [], resources = [], package_files = []):
     """Builds a `DartInfo` for a library that owns several packages at once.
 
     The one case `dart_info()` cannot state: a single `dart_library` merged
@@ -268,6 +277,10 @@ def dart_info_multi(label, records, deps = [], srcs = [], resources = []):
         dependency on each other — so these are only the edges leaving it.
       srcs: The members' own Dart sources.
       resources: The members' own non-Dart files under their `lib/`s.
+      package_files: One `(package_name, lib_root, files)` record per member
+        that ships runtime `data`, in the same order as `records`, plus an
+        empty-identity record for the merged target's own `data` when it has
+        some. Empty when nothing ships data.
 
     Returns:
       A `DartInfo` whose `owned_packages` are `records`.
@@ -299,6 +312,7 @@ def dart_info_multi(label, records, deps = [], srcs = [], resources = []):
             for a in getattr(record, "code_assets", ())
             if a.dynamic_library != None
         ],
+        package_file_records = package_files,
     )
 
 def dart_analyzable_info(deps = [], srcs = []):
@@ -452,7 +466,8 @@ def _merged_dart_info(
         srcs,
         resources,
         packages,
-        code_asset_files):
+        code_asset_files,
+        package_file_records):
     """Merges a target's own contributions with its dependencies' closures.
 
     The single place `DartInfo`'s fields are enumerated. Both public
@@ -467,6 +482,8 @@ def _merged_dart_info(
       resources: This target's own non-Dart files under `lib/`.
       packages: This target's own `DartPackageInfo` records (zero or one).
       code_asset_files: This target's own code-asset dynamic libraries.
+      package_file_records: This target's own `(package_name, lib_root,
+        files)` records, one per package that ships runtime `data`.
 
     Returns:
       A `DartInfo`.
@@ -486,6 +503,23 @@ def _merged_dart_info(
         transitive_resources = depset(
             direct = resources,
             transitive = [info.transitive_resources for info in dep_infos],
+        ),
+        # The target's own records, not the closure: a consumer that wants the
+        # closure reads `transitive_package_files`, exactly as it reads
+        # `transitive_srcs` beside `owned_packages`. Both are optional on a
+        # dependency for the same reason `transitive_code_asset_files` is: a
+        # producer built before the field existed legitimately omits it.
+        package_files = depset(direct = package_file_records),
+        transitive_package_files = depset(
+            direct = [
+                f
+                for record in package_file_records
+                for f in record.files
+            ],
+            transitive = [
+                getattr(info, "transitive_package_files", depset())
+                for info in dep_infos
+            ],
         ),
         transitive_packages = depset(
             direct = packages,

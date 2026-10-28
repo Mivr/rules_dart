@@ -32,6 +32,7 @@ load(
 load("//dart/private:dart_test_runner.bzl", "DartTestRunnerMainInfo")
 load("//dart/private:executable_package.bzl", "EXECUTABLE_PACKAGE_ATTRS", "executable_package")
 load("//dart/private:kernel_params.bzl", "kernel_compile_settings")
+load("//dart/private:package_files.bzl", "collect_transitive_package_files")
 load("//dart/private:source_set.bzl", "executable_inputs")
 
 def _kernel_launcher_for_mode(compile_mode, launcher):
@@ -156,6 +157,28 @@ def _binary_source_compile(ctx, dart_sdk_info, own, packages, output, compile_mo
     )
     return packages, code_asset_libs
 
+def _runtime_package_files(ctx):
+    """The dependency package files this binary may stage in its runfiles.
+
+    A build-time tool (`cfg = "exec"`) or the `package:test` runner entrypoint
+    must contribute none: the tool's whole runfiles tree becomes an input of
+    the action that runs it, and the runner's does for `DartTestRunnerSnapshot`.
+    Staging a package's `pubspec.yaml` there would change those action inputs
+    and keys even though nothing reads the file. Every other binary is a
+    program somebody runs, and its dependency package roots belong beside it.
+
+    Args:
+      ctx: The `dart_binary` rule context.
+
+    Returns:
+      A depset of the dependency package files to add to runfiles.
+    """
+    if ctx.configuration.is_tool_configuration():
+        return depset()
+    if DartTestRunnerMainInfo in ctx.attr.main:
+        return depset()
+    return collect_transitive_package_files(ctx.attr.deps)
+
 def _binary_launcher_outputs(ctx, dart_sdk_info, output, is_windows, code_asset_libs, compile_mode, recorded_uses_info, own):
     """The launcher-executable providers for `kernel` mode with `launcher = True`."""
     launcher_exe = ctx.actions.declare_file(
@@ -183,6 +206,7 @@ def _binary_launcher_outputs(ctx, dart_sdk_info, output, is_windows, code_asset_
         transitive_files = depset(
             transitive = [
                 collect_transitive_resources(ctx.attr.deps),
+                _runtime_package_files(ctx),
                 dart_sdk_info.runtime_files,
             ],
         ),
@@ -220,7 +244,12 @@ def _binary_default_outputs(ctx, output, code_asset_libs, compile_mode, dart_sdk
     # what makes `rlocation` work for them.
     runfiles = ctx.runfiles(
         files = ctx.files.data + code_asset_libs,
-        transitive_files = collect_transitive_resources(ctx.attr.deps),
+        transitive_files = depset(
+            transitive = [
+                collect_transitive_resources(ctx.attr.deps),
+                _runtime_package_files(ctx),
+            ],
+        ),
     ).merge_all(
         [dep[DefaultInfo].default_runfiles for dep in ctx.attr.data],
     )

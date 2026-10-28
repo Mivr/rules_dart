@@ -7,6 +7,18 @@ dart_binary(
     deps = ["@pub_deps//:characters"],
 )
 
+# A git-sourced spoke's non-`lib/` files ride runfiles too: the generated
+# `dart_library`'s `data` is what carries its `pubspec.yaml`.
+dart_test(
+    name = "package_files_test",
+    size = "small",
+    main = "package_files_test.dart",
+    deps = [
+        "@pub_deps//:characters",
+        "@rules_dart//dart/runfiles",
+    ],
+)
+
 # A git package materialized from a bundle in this workspace (see
 # git_host_config_ext.bzl): its bytes must not depend on host git
 # configuration (core.autocrlf, core.eol, core.attributesFile), on any OS.

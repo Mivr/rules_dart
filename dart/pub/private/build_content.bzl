@@ -8,6 +8,17 @@ paths instead of only the one whose template was edited.
 
 _LOAD = 'load("@rules_dart//dart:defs.bzl", "dart_library")\n'
 
+# The one text every `package_files` attribute uses. The hosted, git and
+# explicit repository rules, and the `pub.package` tag, all state the same
+# three facts — the default, the opt-in and the opt-out — so they say it once
+# here rather than drifting five near-copies apart.
+PACKAGE_FILES_ATTR_DOC = """\
+Glob patterns for a package's non-`lib/` runtime files, emitted as the generated \
+`dart_library`'s `data` and carried to every consumer's runfiles. Defaults to `pubspec.yaml` and \
+`LICENSE*` at the package root. Pass a broader list (`["assets/**"]`, say) to opt in to more \
+files, or `[]` to opt out. The emitted glob always excludes `lib/**`, `BUILD*` and `WORKSPACE*`.\
+"""
+
 _TEST_LIBRARY = "test_library"
 
 _TEST_RUNNER_LOAD = """\
@@ -81,7 +92,33 @@ def classify_pub_hooks(has_build_hook, has_link_hook, build_hook_handled):
         link_hook = "hook/link.dart" if has_link_hook else "",
     )
 
-def make_dart_library_build_content(name, deps, language_version, code_assets = [], has_unreplaced_hook = "", version = "", link_hook = ""):
+def _package_files_block(package_files):
+    """Renders the `data` glob for a package's non-`lib/` runtime files.
+
+    Empty means the package opted out (`package_files = []`), so no `data`
+    attribute is written at all — writing an empty one would be the same
+    build, but the absence states the opt-out plainly in the generated file.
+    The excludes keep a broad opt-in glob from swallowing the sources or the
+    repository files Bazel generates and reads itself.
+
+    Args:
+      package_files: The glob patterns a spoke's `dart_library.data` takes.
+
+    Returns:
+      BUILD-file text for the `data` attribute, or "" when there is none.
+    """
+    if not package_files:
+        return ""
+    patterns = ", ".join(['"{}"'.format(p) for p in package_files])
+    return (
+        "    data = glob(\n" +
+        "        [{}],\n".format(patterns) +
+        '        exclude = ["lib/**", "BUILD*", "WORKSPACE*"],\n' +
+        "        allow_empty = True,\n" +
+        "    ),\n"
+    )
+
+def make_dart_library_build_content(name, deps, language_version, code_assets = [], has_unreplaced_hook = "", version = "", link_hook = "", package_files = ["pubspec.yaml", "LICENSE*"]):
     """Generate the BUILD.bazel content for a single `dart_library` spoke.
 
     The shape — `srcs = glob(["lib/**/*.dart"], allow_empty = True)`, the
@@ -122,6 +159,16 @@ def make_dart_library_build_content(name, deps, language_version, code_assets = 
         link_hook: Package-relative path of the package's link hook
             (`hook/link.dart`), or empty. Trailing with a default for the same
             reason as `version`.
+        package_files: Glob patterns for the package's non-`lib/` runtime
+            files, emitted as the generated `dart_library`'s `data`. The
+            default is deliberately small — `pubspec.yaml` and `LICENSE*` at
+            the package root — because every pattern here multiplies every
+            dependent test's runfiles tree across hundreds of spokes. Pass a
+            broader list to opt in to more files (`["assets/**"]`, say), or
+            `[]` to opt out. The emitted glob always excludes `lib/**`,
+            `BUILD*` and `WORKSPACE*`. Trailing with a default so
+            rules_flutter's existing `make_dart_library_build_content` call is
+            unchanged.
 
     Returns:
         BUILD.bazel content as a string.
@@ -159,7 +206,7 @@ def make_dart_library_build_content(name, deps, language_version, code_assets = 
 dart_library(
     name = "{target}",
     srcs = glob(["lib/**/*.dart"], allow_empty = True),
-{assets}{deps}{hook}{link_hook}{version}    package_name = "{name}",
+{assets}{deps}{hook}{link_hook}{version}{package_files}    package_name = "{name}",
     resources = glob(
         ["lib/**"],
         exclude = ["lib/**/*.dart"],
@@ -178,6 +225,7 @@ dart_library(
         hook = hook_block,
         link_hook = link_hook_block,
         version = version_block,
+        package_files = _package_files_block(package_files),
         language_version = language_version,
         visibility = "//visibility:private" if name == "test" else "//visibility:public",
     )
@@ -232,7 +280,7 @@ dart_test_package(
 )
 """
 
-def make_dart_package_member_build_content(name, language_version, code_assets = [], has_unreplaced_hook = "", version = "", link_hook = "", merged_label = "//:merged"):
+def make_dart_package_member_build_content(name, language_version, code_assets = [], has_unreplaced_hook = "", version = "", link_hook = "", merged_label = "//:merged", package_files = ["pubspec.yaml", "LICENSE*"]):
     """Generate the BUILD.bazel content for one member of a merged SCC repository.
 
     The member lives in its own subdirectory of the merged repository (so its
@@ -254,6 +302,10 @@ def make_dart_package_member_build_content(name, language_version, code_assets =
         (`hook/link.dart`), or empty.
       merged_label: Label of the merged root library, used only when `name`
         is `"test"`: the runner beside it trains against the merged library.
+      package_files: Glob patterns for the member's non-`lib/` runtime files,
+        emitted as the generated `dart_package_member`'s `data`. The same
+        deliberately small default and exclusions as
+        `make_dart_library_build_content`; `[]` opts out.
 
     Returns:
       BUILD.bazel content as a string.
@@ -286,7 +338,7 @@ def make_dart_package_member_build_content(name, language_version, code_assets =
 dart_package_member(
     name = "{target}",
     srcs = glob(["lib/**/*.dart"], allow_empty = True),
-{assets}{hook}{link_hook}{version}    package_name = "{name}",
+{assets}{hook}{link_hook}{version}{package_files}    package_name = "{name}",
     resources = glob(
         ["lib/**"],
         exclude = ["lib/**/*.dart"],
@@ -304,6 +356,7 @@ dart_package_member(
         hook = hook_block,
         link_hook = link_hook_block,
         version = version_block,
+        package_files = _package_files_block(package_files),
         language_version = language_version,
     )
     if name != "test":

@@ -27,6 +27,19 @@ dart_test(
     ],
 )
 
+# A merged member's non-`lib/` files ride the merged library's runfiles: both
+# member roots ship their own `pubspec.yaml` through `data`.
+dart_test(
+    name = "package_files_test",
+    size = "small",
+    main = "package_files_test.dart",
+    deps = [
+        "@pub_deps//:dio",
+        "@pub_deps//:dio_web_adapter",
+        "@rules_dart//dart/runfiles",
+    ],
+)
+
 # The web program names `package:dio_web_adapter` outright, proving the
 # member's own root resolves on web.
 dart_js_binary(

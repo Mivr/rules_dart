@@ -12,18 +12,20 @@
 
 ## Provider Design
 
-| Provider                  | Level        | Purpose                                                                                                                            |
-| ------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `DartSdkInfo`             | Toolchain    | SDK binaries (`dart`, `dartaotruntime`), SDK root, version, tool_files, compile_files, runtime_files, analyze_files, cross targets |
-| `DartInfo`                | Library      | Package name, lib_root, transitive_srcs, transitive_resources, transitive_packages, transitive_code_asset_files                    |
-| `DartPackageInfo`         | Metadata     | One package's name, lib_root, version, language version, code assets, unreplaced build-hook path, link hook (in DartInfo depsets)  |
-| `DartPackageMetadataInfo` | Declaration  | The name and language version a `dart_package_metadata` states, read back through an attribute by every rule building that package |
-| `DartAnalyzableInfo`      | Executable   | An executable's analyzable closure: a nested `DartInfo`, plus its own entrypoint sources                                           |
-| `DartPackageConfigInfo`   | Build action | Generated package_config.json file                                                                                                 |
-| `DartCompileInfo`         | Binary       | Compiled output file, `compile_mode` string, compiling SDK version (`sdk_version`)                                                 |
-| `DartRecordedUsesInfo`    | Binary       | The uses of `@RecordUse` definitions the compiler recorded (`file`), and whether it could (`kind`: `aot` or `empty`)               |
-| `DartCodeAssetInfo`       | Asset        | One native code asset: asset id, link mode, dynamic library or system URI                                                          |
-| `DartDataAssetInfo`       | Asset        | Data assets a `dart_link_hook` collected: `package`, `name`, `file`, `id` per asset; no bundling paths                             |
+| Provider                  | Level        | Purpose                                                                                                                                                  |
+| ------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DartSdkInfo`             | Toolchain    | SDK binaries (`dart`, `dartaotruntime`), SDK root, version, tool_files, compile_files, runtime_files, analyze_files, cross targets                       |
+| `DartInfo`                | Library      | Package name, lib_root, transitive_srcs, transitive_resources, package_files, transitive_package_files, transitive_packages, transitive_code_asset_files |
+| `DartPackageInfo`         | Metadata     | One package's name, lib_root, version, language version, code assets, unreplaced build-hook path, link hook (in DartInfo depsets)                        |
+| `DartPackageMetadataInfo` | Declaration  | The name and language version a `dart_package_metadata` states, read back through an attribute by every rule building that package                       |
+| `DartAnalyzableInfo`      | Executable   | An executable's analyzable closure: a nested `DartInfo`, plus its own entrypoint sources                                                                 |
+| `DartPackageConfigInfo`   | Build action | Generated package_config.json file                                                                                                                       |
+| `DartCompileInfo`         | Binary       | Compiled output file, `compile_mode` string, compiling SDK version (`sdk_version`)                                                                       |
+| `DartRecordedUsesInfo`    | Binary       | The uses of `@RecordUse` definitions the compiler recorded (`file`), and whether it could (`kind`: `aot` or `empty`)                                     |
+| `DartCodeAssetInfo`       | Asset        | One native code asset: asset id, link mode, dynamic library or system URI                                                                                |
+| `DartDataAssetInfo`       | Asset        | Data assets a `dart_link_hook` collected: `package`, `name`, `file`, `id` per asset; no bundling paths                                                   |
+
+**`DartInfo` separates a package's runtime files from its compile inputs.** `package_files` records this target's own packages as `(package_name, lib_root, files)`, and `transitive_package_files` is the depset of their files through `deps`; both default to empty, and readers use `getattr` so a producer built before the fields existed still works. The files themselves come from `dart_library`/`dart_package_member`'s `data` and the generated pub spokes' default `package_files` glob. They ride runfiles and nothing else: not `DefaultInfo.files` (a `filegroup` or `ctx.files.deps` caller must not see runtime data as library sources), not `transitive_resources` (the analyzer stages that), and not any compile, codegen, analyzer-summary or test-runner-snapshot action. Exec-configured `dart_binary` tools and the `DartTestRunnerMainInfo` runner ship none, because their whole runfiles tree becomes an action input. `resources` is still the `lib/`-only, analyzer-visible half; `data` is the non-`lib/` runtime half.
 
 **DartInfo contains zero Flutter concepts.** A future `rules_flutter` wraps/extends, never modifies.
 

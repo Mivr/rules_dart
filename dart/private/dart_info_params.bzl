@@ -10,7 +10,8 @@ def dart_package_identity(
         package_name,
         lib_root,
         language_version,
-        version = ""):
+        version = "",
+        package_files = []):
     """The package a target contributes to the build.
 
     Args:
@@ -27,6 +28,11 @@ def dart_package_identity(
         `""` remains a legal, meaningful value; only not answering is gone.
       version: The package's own resolved version, or "" when unknown. Only
         pub spokes know it; a hand-written `dart_library` leaves it empty.
+      package_files: The package's runtime-only files: `dart_library`'s
+        `data` files, which ride runfiles and never enter an action. They
+        travel with the identity so `dart_info()` can record them in
+        `DartInfo.package_files` without a ninth parameter of its own. Empty
+        when the package ships none.
 
     Returns:
       A struct with those fields.
@@ -36,4 +42,5 @@ def dart_package_identity(
         lib_root = lib_root,
         language_version = language_version,
         version = version,
+        package_files = package_files,
     )

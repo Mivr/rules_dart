@@ -17,6 +17,20 @@ dart_test(
     main = "unpinned_lock_test.dart",
 )
 
+# A package's non-`lib/` files are part of its runfiles. The test reads the
+# generated spoke's own `pubspec.yaml`, which no compile action has seen, so it
+# fails when the spoke stages `lib/` only.
+dart_test(
+    name = "package_files_test",
+    size = "small",
+    main = "package_files_test.dart",
+    deps = [
+        "@pub_deps//:collection",
+        "@pub_deps//:file",
+        "@rules_dart//dart/runfiles",
+    ],
+)
+
 # `file` imports `path`, and `path` is declared with pub.package() above: both
 # reach this binary through the one hub, so `file` must see the explicit repo.
 dart_binary(
@@ -26,6 +40,17 @@ dart_binary(
         "@pub_deps//:collection",
         "@pub_deps//:file",
         "@pub_deps//:path",
+    ],
+)
+
+# A `dart_binary` sees a transitive pub spoke's runtime files, not only the
+# test runner.
+dart_binary(
+    name = "package_files_bin",
+    main = "package_files_bin.dart",
+    deps = [
+        "@pub_deps//:file",
+        "@rules_dart//dart/runfiles",
     ],
 )
 

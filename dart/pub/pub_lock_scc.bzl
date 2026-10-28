@@ -108,10 +108,11 @@ def _parsed_scc_member(ctx, member, name):
       name: The member package name, also its subdirectory.
 
     Returns:
-      struct(name, version, code_assets, planned, real_deps, pubspec): the
-      member name, its version and code assets, its entry's `planned_deps`
-      value (None when the entry carries none), its real sorted dependency
-      names, and its raw pubspec text ("" when the package ships none).
+      struct(name, version, code_assets, planned, real_deps, pubspec,
+      package_files): the member name, its version and code assets, its
+      entry's `planned_deps` value (None when the entry carries none), its
+      real sorted dependency names, its raw pubspec text ("" when the package
+      ships none), and its runtime-file globs.
     """
     _fetch_scc_member(ctx, member, name)
 
@@ -129,6 +130,7 @@ def _parsed_scc_member(ctx, member, name):
         planned = member.get("planned_deps", None),
         real_deps = sorted(parse_pubspec_deps(pubspec)),
         pubspec = pubspec,
+        package_files = member.get("package_files", ["pubspec.yaml", "LICENSE*"]),
     )
 
 def _verify_scc_plan(repo_name, parsed_members):
@@ -203,6 +205,7 @@ def _write_scc_member_build(ctx, parsed, config):
         version = parsed.version,
         link_hook = "hook/link.dart" if hooks.link_hook else "",
         merged_label = "//:merged",
+        package_files = parsed.package_files,
     ))
 
 def _write_scc_build_files(ctx, parsed_members, config):

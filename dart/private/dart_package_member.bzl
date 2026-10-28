@@ -43,7 +43,7 @@ load("//dart:providers.bzl", "DartCodeAssetInfo", "DartPackageInfo")
 load("//dart/private:common.bzl", "PACKAGE_IDENTITY_ATTRS", "codegen_identity_error", "resolve_package_identity")
 load("//dart/private:dart_info.bzl", "dart_info")
 load("//dart/private:dart_info_params.bzl", "dart_package_identity")
-load("//dart/private:dart_library.bzl", "check_files_under_lib_root", "check_no_duplicate_srcs", "derive_lib_root", "derive_package_name", "link_hook_error")
+load("//dart/private:dart_library.bzl", "check_files_under_lib_root", "check_no_dart_in_data", "check_no_duplicate_srcs", "derive_lib_root", "derive_package_name", "link_hook_error")
 
 def _dart_package_member_impl(ctx):
     identity = resolve_package_identity(ctx)
@@ -73,6 +73,11 @@ def _dart_package_member_impl(ctx):
                  "there would be staged for the analyzer and withheld from the " +
                  "compile. Move it to `srcs`.") % (ctx.label, f.short_path),
             )
+
+    own_data = ctx.files.data
+    err = check_no_dart_in_data(ctx.label, own_data)
+    if err != None:
+        fail(err)
 
     own_srcs = ctx.files.srcs
     lib_root = derive_lib_root(ctx.label.workspace_root, ctx.label.package)
@@ -105,6 +110,7 @@ def _dart_package_member_impl(ctx):
             lib_root = lib_root,
             language_version = identity.language_version,
             version = ctx.attr.version,
+            package_files = own_data,
         ),
         deps = [],
         srcs = own_srcs,
@@ -114,10 +120,13 @@ def _dart_package_member_impl(ctx):
         link_hook = ctx.file.link_hook,
     ).transitive_packages.to_list()[0]
 
+    # `data` rides runfiles only, exactly as on a single-package library: the
+    # merged library collects it from this target's `DefaultInfo.runfiles`
+    # because a member deliberately provides no `DartInfo` of its own.
     return [
         DefaultInfo(
             files = depset(own_srcs + own_resources),
-            runfiles = ctx.runfiles(files = own_srcs + own_resources),
+            runfiles = ctx.runfiles(files = own_srcs + own_resources + own_data),
         ),
         record,
     ]
@@ -131,6 +140,10 @@ dart_package_member = rule(
         ),
         "resources": attr.label_list(
             doc = "The member package's non-Dart files under its `lib/`. `.dart` files belong in `srcs`.",
+            allow_files = True,
+        ),
+        "data": attr.label_list(
+            doc = "Files this member package ships outside its `lib/` that a program reads at run time or a tool finds by walking the package root, such as `pubspec.yaml` and `LICENSE`. They ride this member's and the merged library's runfiles, never `DefaultInfo.files`, `DartInfo.transitive_resources`, or an action's inputs. `.dart` files belong in `srcs`; non-Dart files under `lib/` belong in `resources`.",
             allow_files = True,
         ),
         "code_assets": attr.label_list(

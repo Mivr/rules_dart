@@ -1,0 +1,95 @@
+load("//dart:defs.bzl", "dart_binary", "dart_library", "dart_package_member")
+load(
+    "//dart/tests:package_files_test.bzl",
+    "binary_data_test",
+    "dart_in_data_test",
+    "library_data_test",
+    "member_data_test",
+    "merged_data_test",
+    "package_files_content_test_suite",
+)
+
+dart_library(
+    name = "library",
+    package_name = "package_files_fixture",
+    srcs = ["lib/pkg.dart"],
+    data = [
+        ":LICENSE",
+        ":pubspec.yaml",
+    ],
+)
+
+dart_package_member(
+    name = "member",
+    package_name = "package_files_member",
+    srcs = ["lib/member.dart"],
+    data = [":pubspec.yaml"],
+)
+
+# One member is enough: the merged library's job here is to carry the
+# member's runfiles-only file into its own runfiles and `DartInfo`, which is
+# the path a merged pub cycle takes.
+dart_library(
+    name = "merged",
+    members = [":member"],
+)
+
+# A runnable consumer proves the package files reach a binary's runfiles
+# through `deps` rather than only the library's own `DefaultInfo`.
+dart_binary(
+    name = "app",
+    main = "bin/app.dart",
+    deps = [":library"],
+)
+
+# A `.dart` file in `data` is a compile input that never compiles, so analysis
+# must refuse it and name the attribute.
+dart_library(
+    name = "bad_data",
+    package_name = "bad_data",
+    srcs = ["lib/pkg.dart"],
+    data = [":bad.dart"],
+    tags = ["manual"],
+)
+
+library_data_test(
+    name = "library_data_test",
+    size = "small",
+    package_files = [
+        ":pubspec.yaml",
+        ":LICENSE",
+    ],
+    target_under_test = ":library",
+)
+
+member_data_test(
+    name = "member_data_test",
+    size = "small",
+    package_files = [":pubspec.yaml"],
+    target_under_test = ":member",
+)
+
+merged_data_test(
+    name = "merged_data_test",
+    size = "small",
+    package_files = [":pubspec.yaml"],
+    target_under_test = ":merged",
+)
+
+binary_data_test(
+    name = "binary_data_test",
+    size = "small",
+    package_files = [
+        ":pubspec.yaml",
+        ":LICENSE",
+    ],
+    target_under_test = ":app",
+)
+
+dart_in_data_test(
+    name = "dart_in_data_test",
+    size = "small",
+    target_under_test = ":bad_data",
+)
+
+package_files_content_test_suite(name = "package_files_content_test")

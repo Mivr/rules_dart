@@ -41,6 +41,7 @@ load(
 load("//dart/private:dart_test_runner.bzl", "DartTestKernelInfo", "DartTestRunnerInfo")
 load("//dart/private:executable_package.bzl", "EXECUTABLE_PACKAGE_ATTRS", "executable_package")
 load("//dart/private:kernel_params.bzl", "kernel_compile_settings")
+load("//dart/private:package_files.bzl", "collect_transitive_package_files")
 load("//dart/private:source_set.bzl", "executable_inputs")
 
 def _dart_test_impl(ctx):
@@ -89,6 +90,9 @@ def _dart_test_impl(ctx):
     # A dep's `lib/**` non-Dart files are part of the package at run time under
     # pub, and the dill carries only compiled code — so they come in here, the
     # same way `dart_binary` stages them, and are reached with `rlocation`.
+    # Its non-`lib/` `data` files come along for the same reason: a program
+    # that walks a dependency's package root (`pubspec.yaml`, `LICENSE`) has
+    # no other way to see them once the dill is all that runs.
     #
     # The test runs its kernel with the launcher and the VM, so it takes only
     # `runtime_files`. A test that runs SDK commands itself (`dart format`,
@@ -100,6 +104,7 @@ def _dart_test_impl(ctx):
             transitive = [
                 dart_sdk_info.runtime_files,
                 collect_transitive_resources(ctx.attr.deps),
+                collect_transitive_package_files(ctx.attr.deps),
             ],
         ),
     )
