@@ -1,3 +1,7 @@
+> **Moved.** These rules now live at **[Mivr/ai_rules_dart](https://github.com/Mivr/ai_rules_dart)**, with the whole history,
+> every tag and every release. Please open issues and pull requests there; this fork is frozen and no longer
+> watched. Upstream remains [aran/rules_dart](https://github.com/aran/rules_dart).
+
 > **Built and maintained by AI agents.** `ai_rules_dart` is written, reviewed, tested and released by AI agents.
 > Every change passes deterministic gates before it merges: hermeticity checks, byte-identical outputs, strict
 > code-quality limits.
